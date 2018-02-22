@@ -1,0 +1,7 @@
+[package]
+name = "scheduler"
+version = "0.1.0"
+authors = ["Aaron Langford <aaron.langford31@gmail.com>"]
+
+[dependencies]
+crossbeam-deque = "0.1"
