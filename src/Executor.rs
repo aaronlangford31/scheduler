@@ -1,46 +1,54 @@
-use crossbeam_deque::{Deque};
-use std::sync::Arc;
+use crossbeam_deque::Deque;
+use std::sync::{Arc, mpsc};
 use std::thread;
-use super::Task::{Tickable, TaskState};
+use super::Task::{TaskState, Tickable};
+
+type AtomicTaskQueue = Arc<Deque<Arc<Tickable>>>;
 
 pub struct Executor {
-  thread: thread::Thread,
-  work_queue: Arc<Deque<Arc<Tickable>>>,
+    thread: thread::JoinHandle<()>,
+    work_queue: AtomicTaskQueue,
 }
 
 impl Executor {
-  pub fn new() -> Executor {
-    let queue = Arc::new(Deque::<Arc<Tickable>>::new());
-    let cloned_queue = queue.clone();
-    let thread = thread::spawn(move || {
-      /*Spin and take stuff from queue*/
-      while true {
-        let task = cloned_queue.steal();
-        task.tick();
-        match task.get_state() {
-          TaskState::Incomplete => {
-            // TODO: Convert this to a retry poll with time checks
-            cloned_queue.enqueue(task);
-          }
-          // Could handle completed/failed tasks here, but not necessary
-          // Task futures will take care of that, and whoever scheduled
-          // the task will be responsible for taking care of the failure
-          // that is exposed through the future.
+    pub fn new() -> Executor {
+        let (tx, rx) = mpsc::channel::<AtomicTaskQueue>();
+        let t_handle = thread::spawn(move || {
+            let q = rx.recv().unwrap();
+            /*Spin and take stuff from queue*/
+            while true {
+                match q.pop() {
+                    Some(task) => {
+                        task.tick();
+                        match task.get_state() {
+                            &TaskState::Incomplete => {
+                                // TODO: Convert this to a retry poll with time checks
+                                q.push(task);
+                            } // Could handle completed/failed tasks here, but not necessary
+                              // Task futures will take care of that, and whoever scheduled
+                              // the task will be responsible for taking care of the failure
+                              // that is exposed through the future.
+                        };
+                    }
+                };
+            }
+        });
+
+        let queue = Arc::new(Deque::<Arc<Tickable>>::new());
+        tx.send(queue.clone()).unwrap();
+
+        let executor = Executor {
+            thread: t_handle,
+            work_queue: queue,
         };
-      }
-    });
-    let executor = Executor {
-      thread,
-      workQueue: queue,
-    };
-    executor
-  }
+        executor
+    }
 
-  pub fn schedule(&self, task: Arc<Tickable>) {
-    self.workQueue.enqueue(task);
-  }
+    pub fn schedule(&self, task: Arc<Tickable>) {
+        self.work_queue.push(task);
+    }
 
-  pub fn task_count(&self) -> usize {
-    self.work_queue.len()
-  }
+    pub fn task_count(&self) -> usize {
+        self.work_queue.len()
+    }
 }
