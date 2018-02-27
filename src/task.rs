@@ -44,9 +44,8 @@ where
         task
     }
 
-    // TODO: Verify the ownership here is correct.
-    fn get_result(&self) -> Option<R> {
-        self.result
+    fn get_result(&self) -> &Option<R> {
+        &self.result
     }
 }
 
@@ -67,7 +66,7 @@ where
             Ok(elapsed) => {
                 self.elapsed += (elapsed.as_secs() * 1_000_000_000) + elapsed.subsec_nanos() as u64;
             }
-            Err(err) => {
+            Err(_err) => {
                 self.state = TaskState::Error;
             }
         }

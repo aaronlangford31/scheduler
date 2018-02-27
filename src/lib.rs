@@ -1,8 +1,8 @@
 extern crate crossbeam_deque;
 
-mod CpuPool;
-mod Executor;
-mod Task;
+mod cpupool;
+mod executor;
+mod task;
 
 #[cfg(test)]
 mod tests {

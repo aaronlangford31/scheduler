@@ -1,6 +1,6 @@
 use std::sync::Arc;
-use super::Task::Tickable;
-use super::Executor::Executor;
+use super::task::Tickable;
+use super::executor::Executor;
 
 pub struct CpuPool {
     workers: Vec<Executor>,
@@ -11,7 +11,7 @@ impl CpuPool {
         let mut pool = CpuPool {
             workers: Vec::with_capacity(n_threads),
         };
-        for i in 0..n_threads {
+        for _i in 0..n_threads {
             pool.workers.push(Executor::new());
         }
 
