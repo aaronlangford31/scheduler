@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use super::task::Tickable;
+use super::task::Iterable;
 use super::executor::Executor;
 
 pub struct CpuPool {
@@ -22,7 +22,7 @@ impl CpuPool {
     /// Right now, the least busy executor is the one with the least tasks
     /// scheduled, but there could be room for improvement depending on how
     /// this measures in benchmarks.
-    pub fn schedule(&self, task: Arc<Tickable>) -> bool {
+    pub fn schedule(&self, task: Arc<Iterable>) -> bool {
         // get executor with min tasks
         let trgt = self.workers
             .iter()

@@ -8,7 +8,7 @@ pub enum TaskState {
     Error,
 }
 
-pub trait Tickable: Send + Sync {
+pub trait Iterable: Send + Sync {
     fn tick(&mut self);
     fn get_state(&self) -> &TaskState;
 }
@@ -49,7 +49,7 @@ where
     }
 }
 
-impl<F, R> Tickable for Task<F, R>
+impl<F, R> Iterable for Task<F, R>
 where
     F: FnMut() -> (TaskState, Option<R>) + Send + Sync,
     R: Send + Sync,

@@ -2,17 +2,17 @@ use crossbeam_deque::{Deque, Stealer};
 use std::sync::Arc;
 use std::sync::mpsc::{channel, Sender};
 use std::thread;
-use super::task::{TaskState, Tickable};
+use super::task::{TaskState, Iterable};
 
 pub struct Executor {
     thread: thread::JoinHandle<()>,
-    task_channel: Sender<Arc<Tickable>>,
-    work_stealer: Stealer<Arc<Tickable>>,
+    task_channel: Sender<Arc<Iterable>>,
+    work_stealer: Stealer<Arc<Iterable>>,
 }
 
 impl Executor {
     pub fn new() -> Executor {
-        let queue = Deque::<Arc<Tickable>>::new();
+        let queue = Deque::<Arc<Iterable>>::new();
         let stealer = queue.stealer();
 
         let (tx, rx) = channel();
@@ -73,7 +73,7 @@ impl Executor {
         executor
     }
 
-    pub fn schedule(&self, task: Arc<Tickable>) {
+    pub fn schedule(&self, task: Arc<Iterable>) {
         self.task_channel.send(task);
     }
 
