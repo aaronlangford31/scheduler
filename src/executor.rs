@@ -1,8 +1,11 @@
 use crossbeam_deque::{Deque, Stealer};
+use libc::{cpu_set_t, pthread_setaffinity_np, CPU_SET, CPU_ZERO};
+use std::mem;
+use std::os::unix::thread::JoinHandleExt;
 use std::sync::Arc;
 use std::sync::mpsc::{channel, Sender};
 use std::thread;
-use super::task::{TaskState, Iterable};
+use super::task::{Iterable, TaskState};
 
 pub struct Executor {
     thread: thread::JoinHandle<()>,
@@ -11,7 +14,7 @@ pub struct Executor {
 }
 
 impl Executor {
-    pub fn new() -> Executor {
+    pub fn new(cpu: usize) -> Executor {
         let queue = Deque::<Arc<Iterable>>::new();
         let stealer = queue.stealer();
 
@@ -64,6 +67,15 @@ impl Executor {
                 };
             }
         });
+
+        // set thread affinity
+        let tid = t_handle.as_pthread_t();
+        unsafe {
+            let mut cpuset: cpu_set_t = mem::uninitialized();
+            CPU_ZERO(&mut cpuset);
+            CPU_SET(cpu, &mut cpuset);
+            pthread_setaffinity_np(tid, mem::size_of::<cpu_set_t>(), &mut cpuset);
+        };
 
         let executor = Executor {
             thread: t_handle,

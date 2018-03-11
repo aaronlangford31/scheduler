@@ -5,3 +5,4 @@ authors = ["Aaron Langford <aaron.langford31@gmail.com>"]
 
 [dependencies]
 crossbeam-deque = "0.1"
+libc = "0.2"

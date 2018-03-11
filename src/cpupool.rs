@@ -11,8 +11,10 @@ impl CpuPool {
         let mut pool = CpuPool {
             workers: Vec::with_capacity(n_threads),
         };
-        for _i in 0..n_threads {
-            pool.workers.push(Executor::new());
+
+        for i in 0..n_threads {
+            let executor = Executor::new(i);
+            pool.workers.push(executor);
         }
 
         pool

@@ -1,4 +1,5 @@
 extern crate crossbeam_deque;
+extern crate libc;
 
 mod cpupool;
 mod executor;
