@@ -33,7 +33,7 @@ where
     F: FnMut() -> (TaskState, Option<R>) + Send + Sync,
     R: Send + Sync,
 {
-    fn new(func: F) -> Task<F, R> {
+    pub fn new(func: F) -> Task<F, R> {
         let task = Task {
             _tick: func,
             ticks: 0,
@@ -44,7 +44,7 @@ where
         task
     }
 
-    fn get_result(&self) -> &Option<R> {
+    pub fn get_result(&self) -> &Option<R> {
         &self.result
     }
 }
@@ -56,6 +56,7 @@ where
 {
     fn tick(&mut self) {
         self.ticks += 1;
+        println!("Hello from a task!");
         let timer = SystemTime::now();
 
         let (state, result) = (self._tick)();

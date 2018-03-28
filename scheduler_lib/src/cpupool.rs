@@ -1,22 +1,21 @@
-use std::sync::Arc;
-use super::task::Iterable;
 use super::executor::Executor;
+use super::task::Iterable;
+use std::sync::Arc;
 
 pub struct CpuPool {
-    workers: Vec<Executor>,
+    workers: Vec<Executor>
 }
 
 impl CpuPool {
     pub fn new(n_threads: usize) -> CpuPool {
         let mut pool = CpuPool {
-            workers: Vec::with_capacity(n_threads),
+            workers: Vec::with_capacity(n_threads)
         };
-
+        
         for i in 0..n_threads {
             let executor = Executor::new(i);
             pool.workers.push(executor);
         }
-
         pool
     }
 
@@ -32,9 +31,12 @@ impl CpuPool {
         match trgt {
             Some(executor) => {
                 executor.schedule(task);
+                println!("Scheduled work to executor {}", executor.get_cpu());
                 true
             }
             None => false,
         }
     }
 }
+
+// TODO: Implement Drop for CPU Pool

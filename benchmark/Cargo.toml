@@ -1,0 +1,7 @@
+[package]
+name = "benchmark"
+version = "0.1.0"
+authors = ["Aaron Langford <aaron.langford31@gmail.com>"]
+
+[dependencies]
+scheduler = { path = "../scheduler_lib" }
