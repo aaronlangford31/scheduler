@@ -1,4 +1,6 @@
-use std::marker::{Send, Sync};
+use super::waiter::Waiter;
+use std::marker::Send;
+use std::sync::mpsc::{channel, Sender};
 use std::time::SystemTime;
 
 pub enum TaskState {
@@ -8,15 +10,16 @@ pub enum TaskState {
     Error,
 }
 
-pub trait Iterable: Send + Sync {
+pub trait Iterable: Send {
     fn tick(&mut self);
     fn get_state(&self) -> &TaskState;
+    fn complete(self);
 }
 
 pub struct Task<F, R>
 where
-    F: FnMut() -> (TaskState, Option<R>) + Send + Sync,
-    R: Send + Sync,
+    F: FnMut() -> (TaskState, Option<R>) + Send,
+    R: Send,
 {
     // reference to the function, or work this thing needs to do.
     // a way to call poll on that thing. maybe need a Runnable? Why do you need a separate object for the actual function?
@@ -25,13 +28,14 @@ where
     elapsed: u64,
     state: TaskState,
     result: Option<R>,
+    send_result_channel: Option<Sender<R>>,
     _tick: F,
 }
 
 impl<F, R> Task<F, R>
 where
-    F: FnMut() -> (TaskState, Option<R>) + Send + Sync,
-    R: Send + Sync,
+    F: FnMut() -> (TaskState, Option<R>) + Send,
+    R: Send,
 {
     pub fn new(func: F) -> Task<F, R> {
         let task = Task {
@@ -40,23 +44,32 @@ where
             elapsed: 0,
             state: TaskState::Unstarted,
             result: None,
+            send_result_channel: None,
         };
         task
     }
 
-    pub fn get_result(&self) -> &Option<R> {
-        &self.result
+    pub fn waiter(&mut self) -> Result<Waiter<R>, ()> {
+        match self.send_result_channel {
+            Some(_) => Err(()),
+            None => {
+                let (sender, receiver) = channel();
+                self.send_result_channel = Some(sender);
+
+                let waiter = Waiter::new(receiver);
+                Ok(waiter)
+            }
+        }
     }
 }
 
 impl<F, R> Iterable for Task<F, R>
 where
-    F: FnMut() -> (TaskState, Option<R>) + Send + Sync,
-    R: Send + Sync,
+    F: FnMut() -> (TaskState, Option<R>) + Send,
+    R: Send,
 {
     fn tick(&mut self) {
         self.ticks += 1;
-        println!("Hello from a task!");
         let timer = SystemTime::now();
 
         let (state, result) = (self._tick)();
@@ -76,7 +89,17 @@ where
     fn get_state(&self) -> &TaskState {
         &self.state
     }
-}
 
-// I think that the work of advancing the task should be seperated
-// from access to the state of the task... More to come on this.
+    fn complete(self) {
+        match self.result {
+            Some(result) => match self.send_result_channel {
+                Some(ref channel) => match channel.send(result) {
+                    Ok(_) => (),
+                    Err(_err) => println!("Error sending result: channel failure"),
+                },
+                None => println!("Error sending result: channel was None"),
+            },
+            None => println!("Error sending result: called complete when result is empty"),
+        }
+    }
+}

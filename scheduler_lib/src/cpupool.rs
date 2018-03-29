@@ -1,17 +1,16 @@
 use super::executor::Executor;
 use super::task::Iterable;
-use std::sync::Arc;
 
 pub struct CpuPool {
-    workers: Vec<Executor>
+    workers: Vec<Executor>,
 }
 
 impl CpuPool {
     pub fn new(n_threads: usize) -> CpuPool {
         let mut pool = CpuPool {
-            workers: Vec::with_capacity(n_threads)
+            workers: Vec::with_capacity(n_threads),
         };
-        
+
         for i in 0..n_threads {
             let executor = Executor::new(i);
             pool.workers.push(executor);
@@ -23,7 +22,7 @@ impl CpuPool {
     /// Right now, the least busy executor is the one with the least tasks
     /// scheduled, but there could be room for improvement depending on how
     /// this measures in benchmarks.
-    pub fn schedule(&self, task: Arc<Iterable>) -> bool {
+    pub fn schedule(&self, task: Box<Iterable>) -> bool {
         // get executor with min tasks
         let trgt = self.workers
             .iter()
