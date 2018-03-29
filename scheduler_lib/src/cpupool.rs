@@ -30,7 +30,6 @@ impl CpuPool {
         match trgt {
             Some(executor) => {
                 executor.schedule(task);
-                println!("Scheduled work to executor {}", executor.get_cpu());
                 true
             }
             None => false,

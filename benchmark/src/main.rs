@@ -4,7 +4,8 @@ extern crate test;
 
 use scheduler::cpupool::CpuPool;
 use scheduler::task::{Iterable, Task, TaskState};
-use std::sync::Arc;
+use scheduler::waiter::Waiter;
+use std::time::{Duration, SystemTime};
 use test::Bencher;
 
 fn is_prime(n: usize) -> bool {
@@ -42,34 +43,29 @@ fn nth_prime(n: usize) -> usize {
     last_prime
 }
 
-fn run_benchmark(n_cores: usize, n_tasks: usize, n_primes: usize) {
+fn run_benchmark(n_cores: usize, n_tasks: usize, n_primes: usize) -> Duration {
     let pool = CpuPool::new(n_cores);
-    let mut tasks: Vec<Arc<Iterable>> = Vec::with_capacity(n_tasks);
-
+    let mut task_waiters: Vec<Waiter<usize>> = Vec::with_capacity(n_tasks);
+    
+    let timer = SystemTime::now();
     for _i in 0..n_tasks {
-        let task = Task::new(move || {
+        let mut task = Task::new(move || {
             let n = nth_prime(n_primes);
-            println!("{}", n);
             (TaskState::Complete, Some(n))
         });
-        let task_ref = Arc::new(task);
-
-        pool.schedule(task_ref.clone());
-        tasks.push(task_ref);
+        let waiter = task.waiter().unwrap();
+        let boxed_task = Box::new(task);
+        pool.schedule(boxed_task);
+        task_waiters.push(waiter);
     }
 
-    for task in tasks {
-        let mut state = task.get_state();
-        loop {
-            match task.get_state() {
-                &TaskState::Complete | &TaskState::Error => {
-                    println!("A task has haulted");
-                    break;
-                }
-                &TaskState::Incomplete | &TaskState::Unstarted => {}
-            }
+    for task in task_waiters {
+        match task.await() {
+            Ok(_) => (),
+            Err(_) => (),
         }
     }
+    timer.elapsed().unwrap()
 }
 
 #[test]
@@ -100,13 +96,22 @@ fn n2048_prime_benchmark(bencher: &mut Bencher) {
 }
 
 fn uniform_load_short_task() {
-    run_benchmark(4, 1024, 1024);
+    print_header();
+    let elapsed = run_benchmark(8, 1024, 1024);
+    println!("8\t1024\t\t1024\t\t{:?}", elapsed);
 }
 
 fn uniform_load_long_task() {
-    run_benchmark(4, 1024, 8192);
+    print_header();
+    let elapsed = run_benchmark(8, 1024, 8192);
+    println!("8\t1024\t\t8192\t\t{:?}", elapsed);
+}
+
+fn print_header() {
+  println!("Cores\t# of Tasks\tNth Prime\tTime");
 }
 
 fn main() {
     uniform_load_short_task();
+    uniform_load_long_task();
 }

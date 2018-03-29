@@ -39,7 +39,6 @@ impl Executor {
                                 println!("A task was started, but it's state remained unstarted");
                             }
                             &TaskState::Complete => {
-                                println!("Executor {} completed a task.", cpu);
                                 task.complete();
                             }
                             &TaskState::Error => {
