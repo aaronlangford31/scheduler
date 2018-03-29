@@ -40,7 +40,7 @@ impl Executor {
                             }
                             &TaskState::Complete => {
                                 println!("Executor {} completed a task.", cpu);
-                                // maybe send a message that this is done?
+                                task.complete();
                             }
                             &TaskState::Error => {
                                 println!("A task was started, but resulted in an error");

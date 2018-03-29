@@ -20,7 +20,7 @@ where
     pub fn await(&self) -> Result<T, ()> {
         match self.receive_result_channel.recv() {
             Ok(result) => Ok(result),
-            Err(err) => Err(()),
+            Err(_err) => Err(()),
         }
     }
 }

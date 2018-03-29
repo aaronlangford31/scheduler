@@ -13,7 +13,7 @@ pub enum TaskState {
 pub trait Iterable: Send {
     fn tick(&mut self);
     fn get_state(&self) -> &TaskState;
-    fn complete(self);
+    fn complete(self: Box<Self>);
 }
 
 pub struct Task<F, R>
@@ -90,10 +90,11 @@ where
         &self.state
     }
 
-    fn complete(self) {
-        match self.result {
-            Some(result) => match self.send_result_channel {
-                Some(ref channel) => match channel.send(result) {
+    fn complete(self: Box<Self>) {
+        let this = *self;
+        match this.result {
+            Some(result) => match this.send_result_channel {
+                Some(channel) => match channel.send(result) {
                     Ok(_) => (),
                     Err(_err) => println!("Error sending result: channel failure"),
                 },
