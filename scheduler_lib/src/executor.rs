@@ -1,28 +1,40 @@
 use super::task::{Iterable, TaskState};
-use crossbeam_deque::{Deque, Steal, Stealer};
+use crossbeam_deque::{Deque, Stealer};
 use libc::{cpu_set_t, pthread_setaffinity_np, sched_getcpu, CPU_SET, CPU_ZERO};
 use std::mem;
 use std::os::unix::thread::JoinHandleExt;
+use std::sync::mpsc::{channel, Sender, SendError, Receiver};
 use std::thread;
 
 pub struct Executor {
     cpu: usize,
     thread: thread::JoinHandle<()>,
-    work_queue: Deque<Box<Iterable>>,
+    work_channel: Sender<Box<Iterable>>,
     work_stealer: Stealer<Box<Iterable>>,
 }
 
 impl Executor {
     pub fn new(cpu: usize) -> Executor {
-        let work_queue = Deque::<Box<Iterable>>::new();
+        let work_queue = Deque::<Box<Iterable>>::new(); // this will be moved
         let work_stealer = work_queue.stealer();
-        let local_stealer = work_queue.stealer();
+        let (send_work_channel, receive_work_channel) = channel();
 
         let t_handle = thread::spawn(move || {
             // Spin, receive tasks, and take stuff from queue
             loop {
-                match local_stealer.steal() {
-                    Steal::Data(mut task) => {
+                // Check the mailbox for new work from the outside world
+                match receive_work_channel.try_recv() {
+                    Ok(task) => { 
+                      work_queue.push(task);
+                      // if there was work to consume, lets loop back around
+                      // and check for some more before moving on.
+                      continue;
+                    }
+                    Err(_) => {}
+                }
+                // Take an item and work on it
+                match work_queue.pop() {
+                    Some(mut task) => {
                         task.tick();
                         match task.get_state() {
                             &TaskState::Incomplete => {
@@ -33,6 +45,7 @@ impl Executor {
                                 // threads, rather it allows for many stealers
                                 // to be created and moved to many different
                                 // threads.
+                                work_queue.push(task);
                             }
                             &TaskState::Unstarted => {
                                 // this is unexpected, and may be an error
@@ -51,12 +64,9 @@ impl Executor {
                         };
                         continue;
                     }
-                    Steal::Empty => {
+                    None => {
                         // TODO: could use some observability on how many times
                         // popped on an empty queue.
-                        continue;
-                    }
-                    Steal::Retry => {
                         continue;
                     }
                 };
@@ -75,18 +85,18 @@ impl Executor {
         let executor = Executor {
             cpu,
             thread: t_handle,
-            work_queue,
+            work_channel: send_work_channel,
             work_stealer,
         };
         executor
     }
 
-    pub fn schedule(&self, task: Box<Iterable>) {
-        self.work_queue.push(task);
+    pub fn schedule(&self, task: Box<Iterable>) -> Result<(), SendError<Box<Iterable>>> {
+        self.work_channel.send(task)
     }
 
     pub fn task_count(&self) -> usize {
-        self.work_queue.len()
+        self.work_stealer.len()
     }
 
     pub fn get_cpu(&self) -> usize {
