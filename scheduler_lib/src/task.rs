@@ -1,4 +1,4 @@
-use super::waiter::Waiter;
+use super::waiter::{Waiter, WaitResult};
 use std::marker::Send;
 use std::sync::mpsc::{channel, Sender};
 use std::time::SystemTime;
@@ -28,7 +28,7 @@ where
     elapsed: u64,
     state: TaskState,
     result: Option<R>,
-    send_result_channel: Option<Sender<R>>,
+    send_result_channel: Option<Sender<WaitResult<R>>>,
     _tick: F,
 }
 
@@ -49,7 +49,7 @@ where
         task
     }
 
-    pub fn waiter(&mut self) -> Result<Waiter<R>, ()> {
+    pub fn waiter(&mut self) -> Result<Waiter<WaitResult<R>>, ()> {
         match self.send_result_channel {
             Some(_) => Err(()),
             None => {
@@ -94,7 +94,7 @@ where
         let this = *self;
         match this.result {
             Some(result) => match this.send_result_channel {
-                Some(channel) => match channel.send(result) {
+                Some(channel) => match channel.send(WaitResult::new(result, this.elapsed, this.ticks)) {
                     Ok(_) => (),
                     Err(_err) => println!("Error sending result: channel failure"),
                 },

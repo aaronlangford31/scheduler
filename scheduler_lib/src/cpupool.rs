@@ -15,11 +15,11 @@ impl CpuPool {
             let (executor, stealer) = Executor::new(i, n_threads - 1);
             pool.workers.push((executor, stealer));
         }
-        for (executor_a, _) in &pool.workers {
-            &pool.workers
+        for &(ref executor_a, _) in &pool.workers {
+            pool.workers
                 .iter()
-                .filter(|(executor, _)| executor.get_cpu() != executor_a.get_cpu())
-                .for_each(|(_, stealer)| {
+                .filter(|&&(ref worker, _)| worker.get_cpu() != executor_a.get_cpu())
+                .for_each(|&(_, ref stealer)| {
                     executor_a.send_stealer(stealer.clone()).unwrap()
                 });
         }
@@ -34,7 +34,7 @@ impl CpuPool {
         // get executor with min tasks
         let trgt = self.workers
             .iter()
-            .map(|(executor, _)| executor)
+            .map(|&(ref executor, _)| executor)
             .min_by_key(|executor| executor.task_count());
         match trgt {
             Some(executor) => {

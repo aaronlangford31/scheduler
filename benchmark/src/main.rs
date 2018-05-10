@@ -1,12 +1,13 @@
-#![feature(test)]
+extern crate rand;
 extern crate scheduler;
-extern crate test;
+extern crate statrs;
 
 use scheduler::cpupool::CpuPool;
-use scheduler::task::{Iterable, Task, TaskState};
-use scheduler::waiter::Waiter;
-use std::time::{Duration, SystemTime};
-use test::Bencher;
+use scheduler::task::{Task, TaskState};
+use scheduler::waiter::{WaitResult, Waiter};
+use std::time::{Duration, Instant, SystemTime};
+
+mod data;
 
 fn is_prime(n: usize) -> bool {
     match n {
@@ -45,8 +46,8 @@ fn nth_prime(n: usize) -> usize {
 
 fn run_benchmark(n_cores: usize, n_tasks: usize, n_primes: usize) -> Duration {
     let pool = CpuPool::new(n_cores);
-    let mut task_waiters: Vec<Waiter<usize>> = Vec::with_capacity(n_tasks);
-    
+    let mut task_waiters: Vec<Waiter<WaitResult<usize>>> = Vec::with_capacity(n_tasks);
+
     let timer = SystemTime::now();
     for _i in 0..n_tasks {
         let mut task = Task::new(move || {
@@ -66,6 +67,42 @@ fn run_benchmark(n_cores: usize, n_tasks: usize, n_primes: usize) -> Duration {
         }
     }
     timer.elapsed().unwrap()
+}
+
+fn run_benchmark_uncertain(n_cores: usize, task_data: Vec<(f64, f64)>) -> Vec<(u64, usize, f64)> {
+    let pool = CpuPool::new(n_cores);
+
+    let waiters: Vec<(u64, usize, Waiter<WaitResult<usize>>)> = task_data
+        .into_iter()
+        .map(|data| {
+            // spin for a certain amount of time
+            let now = Instant::now();
+            let delay = (data.0 * 1000.0) as u64;
+            let n = (data.1 * 100.0) as usize;
+            let until = Duration::from_nanos(delay);
+            while now.elapsed() < until {}
+            // create a task
+            let mut task = Task::new(move || {
+                let n = nth_prime(n);
+                (TaskState::Complete, Some(n))
+            });
+            let waiter = task.waiter().unwrap();
+            let boxed_task = Box::new(task);
+            pool.schedule(boxed_task);
+            (delay, n, waiter)
+        })
+        .collect();
+
+    waiters
+        .into_iter()
+        .map(|(delay, size, waiter)| {
+            let result = match waiter.await() {
+                Ok(wait_result) => wait_result.get_elapsed() as f64,
+                Err(_) => -1.0,
+            };
+            (delay, size, result)
+        })
+        .collect()
 }
 
 #[test]
@@ -107,11 +144,57 @@ fn uniform_load_long_task() {
     println!("8\t1024\t\t8192\t\t{:?}", elapsed);
 }
 
+fn low_freq_short_task_short_tail() {
+    // expect a new task once every 100 microseconds
+    let exp = data::F64exponentialUncertain { rate: 1.0 / 100.0 };
+    // expected value of size param is 5, with low tail
+    let gamma = data::F64gammaUncertain {
+        shape: 10.0,
+        rate: 2.0,
+    };
+    let data = data::generate_task_data(10000, exp, gamma);
+    let results = run_benchmark_uncertain(8, data);
+    results
+        .into_iter()
+        .for_each(|r| println!("{:?},{:?},{:?}", r.0, r.1, r.2));
+}
+
+fn med_freq_short_task_short_tail() {
+    // expect a new task once every 100 microseconds
+    let exp = data::F64exponentialUncertain { rate: 1.0 / 10.0 };
+    // expected value of size param is 5, with low tail
+    let gamma = data::F64gammaUncertain {
+        shape: 10.0,
+        rate: 2.0,
+    };
+    let data = data::generate_task_data(10000, exp, gamma);
+    let results = run_benchmark_uncertain(8, data);
+    results
+        .into_iter()
+        .for_each(|r| println!("{:?},{:?},{:?}", r.0, r.1, r.2));
+}
+
+fn high_freq_short_task_short_tail() {
+    // expect a new task once every 100 microseconds
+    let exp = data::F64exponentialUncertain { rate: 100.0 };
+    // expected value of size param is 5, with low tail
+    let gamma = data::F64gammaUncertain {
+        shape: 10.0,
+        rate: 2.0,
+    };
+    let data = data::generate_task_data(10000, exp, gamma);
+    let results = run_benchmark_uncertain(8, data);
+    results
+        .into_iter()
+        .for_each(|r| println!("{:?},{:?},{:?}", r.0, r.1, r.2));
+}
+
 fn print_header() {
-  println!("Cores\t# of Tasks\tNth Prime\tTime");
+    println!("Cores\t# of Tasks\tNth Prime\tTime");
 }
 
 fn main() {
-    uniform_load_short_task();
-    uniform_load_long_task();
+    //uniform_load_short_task();
+    //uniform_load_long_task();
+    low_freq_short_task_short_tail();
 }

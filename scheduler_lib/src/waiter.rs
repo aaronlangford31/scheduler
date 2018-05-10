@@ -11,9 +11,9 @@ impl<T> Waiter<T>
 where
     T: Send,
 {
-    pub fn new(receive_result_channel: Receiver<T>) -> Waiter<T> {
+    pub fn new(channel: Receiver<T>) -> Waiter<T> {
         Waiter {
-            receive_result_channel,
+            receive_result_channel: channel,
         }
     }
 
@@ -22,5 +22,31 @@ where
             Ok(result) => Ok(result),
             Err(_err) => Err(()),
         }
+    }
+}
+
+pub struct WaitResult<T>
+where
+    T: Send,
+{
+    result: T,
+    elapsed: u64,
+    ticks: u32
+}
+
+impl<T> WaitResult<T>
+where
+    T: Send,
+{
+    pub fn new(result: T, elapsed: u64, ticks: u32) -> WaitResult<T> {
+        WaitResult {
+            result,
+            elapsed,
+            ticks,
+        }
+    }
+
+    pub fn get_elapsed(&self) -> u64 {
+        self.elapsed
     }
 }

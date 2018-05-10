@@ -3,3 +3,4 @@ scheduler_lib/target
 benchmark/target
 **/*.rs.bk
 Cargo.lock
+.idea
