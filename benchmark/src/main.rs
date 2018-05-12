@@ -2,7 +2,7 @@ extern crate rand;
 extern crate scheduler;
 extern crate statrs;
 
-use scheduler::cpupool::CpuPool;
+use scheduler::cpupool::{CpuPool, SegregatedCpuPool, WorkStealingCpuPool};
 use scheduler::task::{Task, TaskState};
 use scheduler::waiter::{WaitResult, Waiter};
 use std::time::{Duration, Instant, SystemTime};
@@ -34,6 +34,9 @@ fn next_prime(start_from: usize) -> usize {
 }
 
 fn nth_prime(n: usize) -> usize {
+    if n == 0 {
+        return 0;
+    }
     let mut counter = 1;
     let mut last_prime = 2;
 
@@ -45,7 +48,7 @@ fn nth_prime(n: usize) -> usize {
 }
 
 fn run_benchmark(n_cores: usize, n_tasks: usize, n_primes: usize) -> Duration {
-    let pool = CpuPool::new(n_cores);
+    let pool = WorkStealingCpuPool::new(n_cores);
     let mut task_waiters: Vec<Waiter<WaitResult<usize>>> = Vec::with_capacity(n_tasks);
 
     let timer = SystemTime::now();
@@ -70,7 +73,7 @@ fn run_benchmark(n_cores: usize, n_tasks: usize, n_primes: usize) -> Duration {
 }
 
 fn run_benchmark_uncertain(n_cores: usize, task_data: Vec<(f64, f64)>) -> Vec<(u64, usize, f64)> {
-    let pool = CpuPool::new(n_cores);
+    let pool = SegregatedCpuPool::new(n_cores);
 
     let waiters: Vec<(u64, usize, Waiter<WaitResult<usize>>)> = task_data
         .into_iter()
@@ -78,7 +81,7 @@ fn run_benchmark_uncertain(n_cores: usize, task_data: Vec<(f64, f64)>) -> Vec<(u
             // spin for a certain amount of time
             let now = Instant::now();
             let delay = (data.0 * 1000.0) as u64;
-            let n = (data.1 * 100.0) as usize;
+            let n = (data.1 * 1000.0) as usize;
             let until = Duration::from_nanos(delay);
             while now.elapsed() < until {}
             // create a task
@@ -153,22 +156,7 @@ fn low_freq_short_task_short_tail() {
         rate: 2.0,
     };
     let data = data::generate_task_data(10000, exp, gamma);
-    let results = run_benchmark_uncertain(8, data);
-    results
-        .into_iter()
-        .for_each(|r| println!("{:?},{:?},{:?}", r.0, r.1, r.2));
-}
-
-fn med_freq_short_task_short_tail() {
-    // expect a new task once every 100 microseconds
-    let exp = data::F64exponentialUncertain { rate: 1.0 / 10.0 };
-    // expected value of size param is 5, with low tail
-    let gamma = data::F64gammaUncertain {
-        shape: 10.0,
-        rate: 2.0,
-    };
-    let data = data::generate_task_data(10000, exp, gamma);
-    let results = run_benchmark_uncertain(8, data);
+    let results = run_benchmark_uncertain(6, data);
     results
         .into_iter()
         .for_each(|r| println!("{:?},{:?},{:?}", r.0, r.1, r.2));
@@ -183,7 +171,67 @@ fn high_freq_short_task_short_tail() {
         rate: 2.0,
     };
     let data = data::generate_task_data(10000, exp, gamma);
-    let results = run_benchmark_uncertain(8, data);
+    let results = run_benchmark_uncertain(6, data);
+    results
+        .into_iter()
+        .for_each(|r| println!("{:?},{:?},{:?}", r.0, r.1, r.2));
+}
+
+fn low_freq_long_task_short_tail() {
+    // expect a new task once every 100 microseconds
+    let exp = data::F64exponentialUncertain { rate: 1.0 / 100.0 };
+    // expected value of size param is 5, with low tail
+    let gamma = data::F64gammaUncertain {
+        shape: 40.0,
+        rate: 2.0,
+    };
+    let data = data::generate_task_data(10000, exp, gamma);
+    let results = run_benchmark_uncertain(6, data);
+    results
+        .into_iter()
+        .for_each(|r| println!("{:?},{:?},{:?}", r.0, r.1, r.2));
+}
+
+fn high_freq_long_task_short_tail() {
+    // expect a new task once every 100 microseconds
+    let exp = data::F64exponentialUncertain { rate: 100.0 };
+    // expected value of size param is 5, with low tail
+    let gamma = data::F64gammaUncertain {
+        shape: 40.0,
+        rate: 2.0,
+    };
+    let data = data::generate_task_data(10000, exp, gamma);
+    let results = run_benchmark_uncertain(6, data);
+    results
+        .into_iter()
+        .for_each(|r| println!("{:?},{:?},{:?}", r.0, r.1, r.2));
+}
+
+fn low_freq_long_tail() {
+    // expect a new task once every 100 microseconds
+    let exp = data::F64exponentialUncertain { rate: 1.0 / 100.0 };
+    // expected value of size param is 5, with low tail
+    let gamma = data::F64gammaUncertain {
+        shape: 1.0,
+        rate: 0.05,
+    };
+    let data = data::generate_task_data(10000, exp, gamma);
+    let results = run_benchmark_uncertain(6, data);
+    results
+        .into_iter()
+        .for_each(|r| println!("{:?},{:?},{:?}", r.0, r.1, r.2));
+}
+
+fn high_freq_long_tail() {
+    // expect a new task once every 100 microseconds
+    let exp = data::F64exponentialUncertain { rate: 100.0 };
+    // expected value of size param is 5, with low tail
+    let gamma = data::F64gammaUncertain {
+        shape: 1.0,
+        rate: 0.05,
+    };
+    let data = data::generate_task_data(10000, exp, gamma);
+    let results = run_benchmark_uncertain(6, data);
     results
         .into_iter()
         .for_each(|r| println!("{:?},{:?},{:?}", r.0, r.1, r.2));
@@ -194,7 +242,10 @@ fn print_header() {
 }
 
 fn main() {
-    //uniform_load_short_task();
-    //uniform_load_long_task();
-    low_freq_short_task_short_tail();
+    //low_freq_short_task_short_tail();
+    //high_freq_short_task_short_tail();
+    // low_freq_long_task_short_tail();
+    //high_freq_long_task_short_tail();
+    //low_freq_long_tail();
+    high_freq_long_tail();
 }

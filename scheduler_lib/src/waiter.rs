@@ -31,7 +31,7 @@ where
 {
     result: T,
     elapsed: u64,
-    ticks: u32
+    ticks: u32,
 }
 
 impl<T> WaitResult<T>

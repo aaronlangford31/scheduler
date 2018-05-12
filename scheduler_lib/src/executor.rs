@@ -73,9 +73,7 @@ impl Executor {
                         continue;
                     }
                     None => {
-                        let stealer = stealers
-                            .iter()
-                            .max_by_key(|s| s.len());
+                        let stealer = stealers.iter().max_by_key(|s| s.len());
                         match stealer {
                             Some(stealer) => match stealer.steal() {
                                 Steal::Data(task) => {

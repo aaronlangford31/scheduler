@@ -1,4 +1,4 @@
-use super::waiter::{Waiter, WaitResult};
+use super::waiter::{WaitResult, Waiter};
 use std::marker::Send;
 use std::sync::mpsc::{channel, Sender};
 use std::time::SystemTime;
@@ -94,10 +94,12 @@ where
         let this = *self;
         match this.result {
             Some(result) => match this.send_result_channel {
-                Some(channel) => match channel.send(WaitResult::new(result, this.elapsed, this.ticks)) {
-                    Ok(_) => (),
-                    Err(_err) => println!("Error sending result: channel failure"),
-                },
+                Some(channel) => {
+                    match channel.send(WaitResult::new(result, this.elapsed, this.ticks)) {
+                        Ok(_) => (),
+                        Err(_err) => println!("Error sending result: channel failure"),
+                    }
+                }
                 None => println!("Error sending result: channel was None"),
             },
             None => println!("Error sending result: called complete when result is empty"),
