@@ -3,7 +3,7 @@ use crossbeam_deque::{Deque, Steal, Stealer};
 use libc::{cpu_set_t, pthread_setaffinity_np, CPU_SET, CPU_ZERO};
 use std::mem;
 use std::os::unix::thread::JoinHandleExt;
-use std::sync::mpsc::{channel, SendError, Sender};
+use std::sync::mpsc::{channel, Receiver, SendError, Sender};
 use std::thread;
 
 pub struct Executor {
@@ -23,71 +23,14 @@ impl Executor {
         let (send_stealer_channel, receive_stealer_channel) = channel();
 
         let t_handle = thread::spawn(move || {
-            // TODO: Create an inner struct to wrap all this logic up
-            let mut stealers: Vec<Stealer<Box<Iterable>>> = Vec::with_capacity(n_stealers);
-            for _ in 0..n_stealers {
-                match receive_stealer_channel.recv() {
-                    Ok(stealer) => {
-                        stealers.push(stealer);
-                    }
-                    Err(_) => {
-                        println!("Failed to recieve stealer.");
-                    }
-                }
-            }
-            // Spin, receive tasks, and take stuff from queue
-            loop {
-                // Check the mailbox for new work from the outside world
-                match receive_work_channel.try_recv() {
-                    Ok(task) => {
-                        work_queue.push(task);
-                        // if there was work to consume, lets loop back around
-                        // and check for some more before moving on.
-                        continue;
-                    }
-                    Err(_) => {}
-                }
-                // Take an item and work on it
-                match work_queue.pop() {
-                    Some(mut task) => {
-                        task.tick();
-                        match task.get_state() {
-                            &TaskState::Incomplete => {
-                                work_queue.push(task);
-                            }
-                            &TaskState::Unstarted => {
-                                // this is unexpected, and may be an error
-                                println!("A task was started, but it's state remained unstarted");
-                            }
-                            &TaskState::Complete => {
-                                task.complete();
-                            }
-                            &TaskState::Error => {
-                                println!("A task was started, but resulted in an error");
-                                // current philosophy: errors should be handled
-                                // by the publisher of the task. Might be worth
-                                // adding some layers here to make the reason
-                                // for failure easy to determine.
-                            }
-                        };
-                        continue;
-                    }
-                    None => {
-                        let stealer = stealers.iter().max_by_key(|s| s.len());
-                        match stealer {
-                            Some(stealer) => match stealer.steal() {
-                                Steal::Data(task) => {
-                                    work_queue.push(task);
-                                }
-                                Steal::Empty => {}
-                                Steal::Retry => {}
-                            },
-                            None => {}
-                        };
-                        continue;
-                    }
-                };
-            }
+            let mut inner_executor = InnerExecutor::new(
+                cpu,
+                work_queue,
+                receive_work_channel,
+                receive_stealer_channel,
+                n_stealers,
+            );
+            inner_executor.run();
         });
 
         // set thread affinity
@@ -130,3 +73,108 @@ impl Executor {
 }
 
 // TODO: Implement Drop for Executor
+
+struct InnerExecutor {
+    cpu: usize,
+    work_queue: Deque<Box<Iterable>>,
+    receive_work_channel: Receiver<Box<Iterable>>,
+    receive_stealer_channel: Receiver<Stealer<Box<Iterable>>>,
+    stealers: Vec<Stealer<Box<Iterable>>>,
+}
+
+impl InnerExecutor {
+    fn new(
+        cpu: usize,
+        work_queue: Deque<Box<Iterable>>,
+        receive_work_channel: Receiver<Box<Iterable>>,
+        receive_stealer_channel: Receiver<Stealer<Box<Iterable>>>,
+        n_stealers: usize,
+    ) -> InnerExecutor {
+        let stealers = Vec::with_capacity(n_stealers);
+        let mut inner_executor = InnerExecutor {
+            cpu,
+            work_queue,
+            receive_work_channel,
+            receive_stealer_channel,
+            stealers,
+        };
+        inner_executor.receive_stealers();
+        inner_executor
+    }
+
+    fn run(&mut self) {
+        loop {
+            self.receive_work();
+            let did_work = self.do_work();
+            if !did_work {
+                self.steal_work();
+            }
+        }
+    }
+
+    fn receive_work(&mut self) {
+        // TODO: handle errors that do not have to do with no messages
+        while let Ok(task) = self.receive_work_channel.try_recv() {
+            self.work_queue.push(task);
+        }
+        if self.work_queue.len() > 0 {
+            println!("received work. work queue len {}", self.work_queue.len());
+        }
+    }
+
+    fn receive_stealers(&mut self) {
+        for _ in 0..self.stealers.capacity() {
+            match self.receive_stealer_channel.recv() {
+                Ok(stealer) => {
+                    self.stealers.push(stealer);
+                }
+                Err(_) => {
+                    println!("Failed to recieve stealer.");
+                }
+            }
+        }
+    }
+
+    fn do_work(&mut self) -> bool {
+        match self.work_queue.pop() {
+            Some(mut task) => {
+                task.tick();
+                match task.get_state() {
+                    &TaskState::Incomplete => {
+                        self.work_queue.push(task);
+                    }
+                    &TaskState::Unstarted => {
+                        // this is unexpected, and may be an error
+                        println!("A task was started, but it's state remained unstarted");
+                    }
+                    &TaskState::Complete => {
+                        task.complete();
+                    }
+                    &TaskState::Error => {
+                        println!("A task was started, but resulted in an error");
+                        // current philosophy: errors should be handled
+                        // by the publisher of the task. Might be worth
+                        // adding some layers here to make the reason
+                        // for failure easy to determine.
+                    }
+                };
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn steal_work(&mut self) {
+        let stealer = self.stealers.iter().max_by_key(|s| s.len());
+        match stealer {
+            Some(stealer) => match stealer.steal() {
+                Steal::Data(task) => {
+                    self.work_queue.push(task);
+                }
+                Steal::Empty => {}
+                Steal::Retry => {}
+            },
+            None => {}
+        };
+    }
+}

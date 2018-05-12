@@ -30,8 +30,6 @@ impl WorkStealingCpuPool {
 }
 
 impl CpuPool for WorkStealingCpuPool {
-
-
     // Finds the least busy executor and queues the task into it's work queue
     // Right now, the least busy executor is the one with the least tasks
     // scheduled, but that number is possibly incorrect because Executors
@@ -47,7 +45,7 @@ impl CpuPool for WorkStealingCpuPool {
                 executor.schedule(task);
                 Ok(())
             }
-            None => Err(())
+            None => Err(()),
         }
     }
 }
@@ -70,7 +68,6 @@ impl SegregatedCpuPool {
 }
 
 impl CpuPool for SegregatedCpuPool {
-
     // Finds the least busy executor and queues the task into it's work queue
     // Right now, the least busy executor is the one with the least tasks
     // scheduled, but that number is possibly incorrect because Executors
@@ -85,7 +82,7 @@ impl CpuPool for SegregatedCpuPool {
                 executor.schedule(task);
                 Ok(())
             }
-            None => Err(())
+            None => Err(()),
         }
     }
 }
