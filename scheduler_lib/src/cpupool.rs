@@ -36,10 +36,11 @@ impl CpuPool for WorkStealingCpuPool {
     // receive tasks on a channel, which is not counted in "task_count".
     fn schedule(&self, task: Box<Iterable>) -> Result<(), ()> {
         // get executor with min tasks
-        let trgt = self.workers
+        let trgt = self
+            .workers
             .iter()
             .map(|&(ref executor, _)| executor)
-            .min_by_key(|executor| executor.task_count());
+            .min_by_key(|executor| executor.count_tasks());
         match trgt {
             Some(executor) => {
                 executor.schedule(task);
@@ -70,13 +71,15 @@ impl SegregatedCpuPool {
 impl CpuPool for SegregatedCpuPool {
     // Finds the least busy executor and queues the task into it's work queue
     // Right now, the least busy executor is the one with the least tasks
-    // scheduled, but that number is possibly incorrect because Executors
-    // receive tasks on a channel, which is not counted in "task_count".
+    // scheduled.
     fn schedule(&self, task: Box<Iterable>) -> Result<(), ()> {
+        // update tasks counts
+
         // get executor with min tasks
-        let trgt = self.workers
+        let trgt = self
+            .workers
             .iter()
-            .min_by_key(|executor| executor.task_count());
+            .min_by_key(|executor| executor.count_tasks());
         match trgt {
             Some(executor) => {
                 executor.schedule(task);

@@ -1,6 +1,7 @@
 use super::task::{Iterable, TaskState};
 use crossbeam_deque::{Deque, Steal, Stealer};
 use libc::{cpu_set_t, pthread_setaffinity_np, CPU_SET, CPU_ZERO};
+use std::cell::Cell;
 use std::mem;
 use std::os::unix::thread::JoinHandleExt;
 use std::sync::mpsc::{channel, Receiver, SendError, Sender};
@@ -8,19 +9,22 @@ use std::thread;
 
 pub struct Executor {
     cpu: usize,
+    not_acked_tasks: Cell<usize>,
     thread: thread::JoinHandle<()>,
     work_channel: Sender<Box<Iterable>>,
+    work_acknowledge_channel: Receiver<()>,
+    work_queue_peeker: Stealer<Box<Iterable>>,
     stealer_channel: Sender<Stealer<Box<Iterable>>>,
-    work_stealer: Stealer<Box<Iterable>>,
 }
 
 impl Executor {
     pub fn new(cpu: usize, n_stealers: usize) -> (Executor, Stealer<Box<Iterable>>) {
         let work_queue = Deque::<Box<Iterable>>::new();
         let work_stealer = work_queue.stealer();
-        let local_stealer = work_queue.stealer();
+        let work_queue_peeker = work_queue.stealer();
         let (send_work_channel, receive_work_channel) = channel();
         let (send_stealer_channel, receive_stealer_channel) = channel();
+        let (send_acknowlege_work_channel, receive_acknowlege_work_channel) = channel();
 
         let t_handle = thread::spawn(move || {
             let mut inner_executor = InnerExecutor::new(
@@ -28,6 +32,7 @@ impl Executor {
                 work_queue,
                 receive_work_channel,
                 receive_stealer_channel,
+                send_acknowlege_work_channel,
                 n_stealers,
             );
             inner_executor.run();
@@ -44,15 +49,18 @@ impl Executor {
 
         let executor = Executor {
             cpu,
+            not_acked_tasks: Cell::new(0),
             thread: t_handle,
             work_channel: send_work_channel,
+            work_acknowledge_channel: receive_acknowlege_work_channel,
+            work_queue_peeker,
             stealer_channel: send_stealer_channel,
-            work_stealer: local_stealer,
         };
         (executor, work_stealer)
     }
 
     pub fn schedule(&self, task: Box<Iterable>) -> Result<(), SendError<Box<Iterable>>> {
+        self.not_acked_tasks.set(self.not_acked_tasks.get() + 1);
         self.work_channel.send(task)
     }
 
@@ -63,12 +71,23 @@ impl Executor {
         self.stealer_channel.send(stealer)
     }
 
-    pub fn task_count(&self) -> usize {
-        self.work_stealer.len()
-    }
-
     pub fn get_cpu(&self) -> usize {
         self.cpu
+    }
+
+    pub fn count_tasks(&self) -> usize {
+        // check acknowledged tasks, and change local task
+        // TODO: encapsulate the send/ack channels into 1 channel object
+        let acked_tasks = self.work_acknowledge_channel.try_iter().count();
+        self.not_acked_tasks
+            .set(self.not_acked_tasks.get() - acked_tasks);
+
+        // return the size of the work queue + size of tasks not acked yet
+        // HEADS UP: this count may not be precisely correct once read:
+        // the underlying thread may acknowledge tasks at any point and
+        // alter the size of the work queue. If work stealing is enabled,
+        // then other threads may also alter the size of the work queue
+        return self.not_acked_tasks.get() + self.work_queue_peeker.len();
     }
 }
 
@@ -79,6 +98,7 @@ struct InnerExecutor {
     work_queue: Deque<Box<Iterable>>,
     receive_work_channel: Receiver<Box<Iterable>>,
     receive_stealer_channel: Receiver<Stealer<Box<Iterable>>>,
+    acknowlege_work_channel: Sender<()>,
     stealers: Vec<Stealer<Box<Iterable>>>,
 }
 
@@ -88,6 +108,7 @@ impl InnerExecutor {
         work_queue: Deque<Box<Iterable>>,
         receive_work_channel: Receiver<Box<Iterable>>,
         receive_stealer_channel: Receiver<Stealer<Box<Iterable>>>,
+        acknowlege_work_channel: Sender<()>,
         n_stealers: usize,
     ) -> InnerExecutor {
         let stealers = Vec::with_capacity(n_stealers);
@@ -96,6 +117,7 @@ impl InnerExecutor {
             work_queue,
             receive_work_channel,
             receive_stealer_channel,
+            acknowlege_work_channel,
             stealers,
         };
         inner_executor.receive_stealers();
@@ -116,9 +138,7 @@ impl InnerExecutor {
         // TODO: handle errors that do not have to do with no messages
         while let Ok(task) = self.receive_work_channel.try_recv() {
             self.work_queue.push(task);
-        }
-        if self.work_queue.len() > 0 {
-            println!("received work. work queue len {}", self.work_queue.len());
+            self.acknowlege_work_channel.send(()).unwrap();
         }
     }
 

@@ -72,8 +72,8 @@ fn run_benchmark(n_cores: usize, n_tasks: usize, n_primes: usize) -> Duration {
     timer.elapsed().unwrap()
 }
 
-fn run_benchmark_uncertain(n_cores: usize, task_data: Vec<(f64, f64)>) -> Vec<(u64, usize, f64)> {
-    let pool = SegregatedCpuPool::new(n_cores);
+fn run_benchmark_uncertain(n_cores: usize, task_data: Vec<(f64, f64)>) -> Vec<(u64, usize, u64)> {
+    let pool = WorkStealingCpuPool::new(n_cores);
 
     let waiters: Vec<(u64, usize, Waiter<WaitResult<usize>>)> = task_data
         .into_iter()
@@ -81,7 +81,7 @@ fn run_benchmark_uncertain(n_cores: usize, task_data: Vec<(f64, f64)>) -> Vec<(u
             // spin for a certain amount of time
             let now = Instant::now();
             let delay = (data.0 * 1000.0) as u64;
-            let n = (data.1 * 1000.0) as usize;
+            let n = (data.1 * 10000.0) as usize;
             let until = Duration::from_nanos(delay);
             while now.elapsed() < until {}
             // create a task
@@ -100,8 +100,12 @@ fn run_benchmark_uncertain(n_cores: usize, task_data: Vec<(f64, f64)>) -> Vec<(u
         .into_iter()
         .map(|(delay, size, waiter)| {
             let result = match waiter.await() {
-                Ok(wait_result) => wait_result.get_elapsed() as f64,
-                Err(_) => -1.0,
+                Ok(wait_result) => {
+                    let seconds = wait_result.get_total_time().as_secs();
+                    let nanos = wait_result.get_total_time().subsec_nanos();
+                    (seconds * 1_000_000_000) + nanos as u64
+                }
+                Err(_) => 0,
             };
             (delay, size, result)
         })
@@ -230,7 +234,7 @@ fn high_freq_long_tail() {
         shape: 1.0,
         rate: 0.05,
     };
-    let data = data::generate_task_data(10000, exp, gamma);
+    let data = data::generate_task_data(1000, exp, gamma);
     let results = run_benchmark_uncertain(6, data);
     results
         .into_iter()
@@ -242,9 +246,10 @@ fn print_header() {
 }
 
 fn main() {
+    //uniform_load_short_task();
     //low_freq_short_task_short_tail();
     //high_freq_short_task_short_tail();
-    // low_freq_long_task_short_tail();
+    //low_freq_long_task_short_tail();
     //high_freq_long_task_short_tail();
     //low_freq_long_tail();
     high_freq_long_tail();

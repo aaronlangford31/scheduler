@@ -25,7 +25,8 @@ where
     // a way to call poll on that thing. maybe need a Runnable? Why do you need a separate object for the actual function?
     // Poll needs to simply return status, Tick needs to actually advance the thing.
     ticks: u32,
-    elapsed: u64,
+    cpu_time: u64,
+    birthday: SystemTime,
     state: TaskState,
     result: Option<R>,
     send_result_channel: Option<Sender<WaitResult<R>>>,
@@ -41,7 +42,8 @@ where
         let task = Task {
             _tick: func,
             ticks: 0,
-            elapsed: 0,
+            cpu_time: 0,
+            birthday: SystemTime::now(),
             state: TaskState::Unstarted,
             result: None,
             send_result_channel: None,
@@ -78,7 +80,8 @@ where
 
         match timer.elapsed() {
             Ok(elapsed) => {
-                self.elapsed += (elapsed.as_secs() * 1_000_000_000) + elapsed.subsec_nanos() as u64;
+                self.cpu_time +=
+                    (elapsed.as_secs() * 1_000_000_000) + elapsed.subsec_nanos() as u64;
             }
             Err(_err) => {
                 self.state = TaskState::Error;
@@ -95,7 +98,13 @@ where
         match this.result {
             Some(result) => match this.send_result_channel {
                 Some(channel) => {
-                    match channel.send(WaitResult::new(result, this.elapsed, this.ticks)) {
+                    let total_time = this.birthday.elapsed().unwrap();
+                    match channel.send(WaitResult::new(
+                        result,
+                        this.cpu_time,
+                        total_time,
+                        this.ticks,
+                    )) {
                         Ok(_) => (),
                         Err(_err) => println!("Error sending result: channel failure"),
                     }

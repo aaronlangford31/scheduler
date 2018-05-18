@@ -1,4 +1,5 @@
 use std::sync::mpsc::Receiver;
+use std::time::Duration;
 
 pub struct Waiter<T>
 where
@@ -30,7 +31,8 @@ where
     T: Send,
 {
     result: T,
-    elapsed: u64,
+    cpu_time: u64,
+    total_time: Duration,
     ticks: u32,
 }
 
@@ -38,15 +40,20 @@ impl<T> WaitResult<T>
 where
     T: Send,
 {
-    pub fn new(result: T, elapsed: u64, ticks: u32) -> WaitResult<T> {
+    pub fn new(result: T, cpu_time: u64, total_time: Duration, ticks: u32) -> WaitResult<T> {
         WaitResult {
             result,
-            elapsed,
+            cpu_time,
+            total_time,
             ticks,
         }
     }
 
-    pub fn get_elapsed(&self) -> u64 {
-        self.elapsed
+    pub fn get_cpu_time(&self) -> u64 {
+        self.cpu_time
+    }
+
+    pub fn get_total_time(&self) -> &Duration {
+        &self.total_time
     }
 }
