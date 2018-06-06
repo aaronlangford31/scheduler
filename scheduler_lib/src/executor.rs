@@ -99,7 +99,7 @@ struct InnerExecutor {
     receive_work_channel: Receiver<Box<Iterable>>,
     receive_stealer_channel: Receiver<Stealer<Box<Iterable>>>,
     acknowlege_work_channel: Sender<()>,
-    stealers: Vec<Stealer<Box<Iterable>>>,
+    stealers: Vec<Stealer<Box<Iterable>>>
 }
 
 impl InnerExecutor {
@@ -118,7 +118,7 @@ impl InnerExecutor {
             receive_work_channel,
             receive_stealer_channel,
             acknowlege_work_channel,
-            stealers,
+            stealers
         };
         inner_executor.receive_stealers();
         inner_executor
@@ -156,8 +156,8 @@ impl InnerExecutor {
     }
 
     fn do_work(&mut self) -> bool {
-        match self.work_queue.pop() {
-            Some(mut task) => {
+        match self.work_queue.steal() {
+            Steal::Data(mut task) => {
                 task.tick();
                 match task.get_state() {
                     &TaskState::Incomplete => {
@@ -180,7 +180,8 @@ impl InnerExecutor {
                 };
                 true
             }
-            None => false,
+            Steal::Retry => false,
+            Steal::Empty => false
         }
     }
 
