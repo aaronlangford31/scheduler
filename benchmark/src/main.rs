@@ -5,11 +5,10 @@ extern crate statrs;
 
 use histogram::Histogram;
 use scheduler::cpupool::{CpuPool, SegregatedCpuPool, WorkStealingCpuPool};
-use scheduler::cycles::to_seconds;
+use scheduler::cycles::{rdtsc, to_seconds};
 use scheduler::task::{Task, TaskState};
 use scheduler::waiter::{WaitResult, Waiter};
 use std::env;
-use std::time::{Duration, Instant, SystemTime};
 
 mod data;
 
@@ -71,9 +70,7 @@ fn warm_up(pool: &CpuPool) {
         .into_iter()
         .map(|(size, waiter)| {
             let result = match waiter.await() {
-                Ok(wait_result) => {
-                    wait_result.get_total_time()
-                }
+                Ok(wait_result) => wait_result.get_total_time(),
                 Err(_) => 0,
             };
             (size, result)
@@ -85,8 +82,8 @@ fn run_benchmark(
     n_cores: usize,
     n_elephants: usize,
     task_data: Vec<(u64, usize)>,
-) -> Vec<(u64, usize, f64)> {
-    let pool = WorkStealingCpuPool::new(n_cores);
+) -> Vec<(u64, usize, f64, usize)> {
+    let pool = SegregatedCpuPool::new(n_cores);
 
     warm_up(&pool);
     let big_task_size = 1_000_000;
@@ -99,7 +96,12 @@ fn run_benchmark(
                 (TaskState::Complete, Some(n))
             });
             let waiter = task.waiter().unwrap();
-            pool.schedule(Box::new(task));
+            let sched_result = pool.schedule(Box::new(task));
+            match sched_result {
+                Ok(cpu) => println!("{}", cpu),
+                Err(_) => panic!("Schedule failure")
+            }
+
             waiter
         })
         .collect();
@@ -108,11 +110,11 @@ fn run_benchmark(
         .into_iter()
         .map(|data| {
             // spin for a certain amount of time
-            let now = Instant::now();
+            let now = (to_seconds(rdtsc()) * 1e9) as u64;
             let delay = data.0;
             let n = data.1;
-            let until = Duration::from_nanos(delay);
-            while now.elapsed() < until {}
+            let until = now + delay;
+            while ((to_seconds(rdtsc()) * 1e9) as u64) < until {}
             // create a task
             let mut task = Task::new(move || {
                 let n = nth_prime(n);
@@ -131,6 +133,7 @@ fn run_benchmark(
             let result = match waiter.await() {
                 Ok(wait_result) => {
                     let cycles = wait_result.get_total_time();
+                    println!("{} {}", to_seconds(cycles), wait_result.get_n_steals());
                     to_seconds(cycles)
                 }
                 Err(_) => 0.,
@@ -142,14 +145,15 @@ fn run_benchmark(
     waiters
         .into_iter()
         .map(|(delay, size, waiter)| {
-            let result = match waiter.await() {
+            let (result, n_steals) = match waiter.await() {
                 Ok(wait_result) => {
                     let cycles = wait_result.get_total_time();
-                    to_seconds(cycles)
+                    let steals = wait_result.get_n_steals();
+                    (to_seconds(cycles), steals)
                 }
-                Err(_) => 0.,
+                Err(_) => panic!("Error waiting for task"),
             };
-            (delay, size, result)
+            (delay, size, result, n_steals)
         })
         .collect()
 }
@@ -175,17 +179,14 @@ fn fixed_size_run(frequency: u64, size: usize, n_tasks: usize, n_cores: usize) {
     let results = run_benchmark(n_cores, 0, data);
 
     let mut hist = Histogram::new();
-    results.into_iter().for_each(|(_, _, time)| {
+    results.into_iter().for_each(|(_, _, time, _)| {
         // println!("{}", time);
         &hist.increment((time * 1e9) as u64);
     });
 
     println!(
-        "{} {} {} {} {}",
-        hist.percentile(1.0).unwrap(),
-        hist.percentile(25.0).unwrap(),
+        "{}\t{}",
         hist.percentile(50.0).unwrap(),
-        hist.percentile(75.0).unwrap(),
         hist.percentile(99.0).unwrap()
     );
 }
@@ -195,21 +196,22 @@ fn elephant_run(frequency: u64, size: usize, n_tasks: usize, n_cores: usize) {
     let sizes = vec![size; n_tasks];
     let data: Vec<(u64, usize)> = freq.into_iter().zip(sizes).collect();
 
-    let results = run_benchmark(n_cores, 1, data);
+    let results = run_benchmark(n_cores, 4, data);
 
     let mut hist = Histogram::new();
-    results.into_iter().for_each(|(_, _, time)| {
+    let mut total_steals = 0;
+    results.into_iter().for_each(|(_, _, time, n_steals)| {
         // println!("{}", time);
         &hist.increment((time * 1e9) as u64);
+        total_steals += n_steals;
+        if(n_steals > 1) { println!("Hot potato! {} {}", n_steals, (time * 1e9) as u64) }
     });
 
     println!(
-        "{} {} {} {} {}",
-        hist.percentile(1.0).unwrap(),
-        hist.percentile(25.0).unwrap(),
+        "{}\t{}\t{}",
         hist.percentile(50.0).unwrap(),
-        hist.percentile(75.0).unwrap(),
-        hist.percentile(99.0).unwrap()
+        hist.percentile(99.0).unwrap(),
+        total_steals
     );
 }
 
@@ -226,7 +228,7 @@ fn exp_gamma_run(
     let results = run_benchmark(n_cores, 0, data);
 
     let mut hist = Histogram::new();
-    results.into_iter().for_each(|(_, _, time)| {
+    results.into_iter().for_each(|(_, _, time, _)| {
         &hist.increment((time * 1e9) as u64);
     });
 
@@ -265,7 +267,7 @@ fn main() {
     let n_tasks: usize = args[3].parse().unwrap();
     let n_cores: usize = args[4].parse().unwrap();
 
-    fixed_size_run(
+    elephant_run(
         args[1].parse().unwrap(),
         args[2].parse().unwrap(),
         n_tasks,

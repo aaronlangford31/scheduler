@@ -14,6 +14,7 @@ pub trait Iterable: Send {
     fn tick(&mut self);
     fn get_state(&self) -> &TaskState;
     fn complete(self: Box<Self>);
+    fn mark_stolen(&mut self);
 }
 
 pub struct Task<F, R>
@@ -25,6 +26,7 @@ where
     // a way to call poll on that thing. maybe need a Runnable? Why do you need a separate object for the actual function?
     // Poll needs to simply return status, Tick needs to actually advance the thing.
     ticks: u32,
+    n_steals: usize,
     cpu_time: u64,
     birthday: u64,
     state: TaskState,
@@ -42,6 +44,7 @@ where
         let task = Task {
             _tick: func,
             ticks: 0,
+            n_steals: 0,
             cpu_time: 0,
             birthday: rdtsc(),
             state: TaskState::Unstarted,
@@ -97,6 +100,7 @@ where
                         this.cpu_time,
                         total_time,
                         this.ticks,
+                        this.n_steals,
                     )) {
                         Ok(_) => (),
                         Err(_err) => println!("Error sending result: channel failure"),
@@ -106,5 +110,9 @@ where
             },
             None => println!("Error sending result: called complete when result is empty"),
         }
+    }
+
+    fn mark_stolen(&mut self) {
+        self.n_steals += 1;
     }
 }

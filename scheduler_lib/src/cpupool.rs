@@ -3,7 +3,7 @@ use super::task::Iterable;
 use crossbeam_deque::Stealer;
 
 pub trait CpuPool {
-    fn schedule(&self, task: Box<Iterable>) -> Result<(), ()>;
+    fn schedule(&self, task: Box<Iterable>) -> Result<usize, ()>;
 }
 
 pub struct WorkStealingCpuPool {
@@ -34,18 +34,17 @@ impl CpuPool for WorkStealingCpuPool {
     // Right now, the least busy executor is the one with the least tasks
     // scheduled, but that number is possibly incorrect because Executors
     // receive tasks on a channel, which is not counted in "task_count".
-    fn schedule(&self, task: Box<Iterable>) -> Result<(), ()> {
+    fn schedule(&self, task: Box<Iterable>) -> Result<usize, ()> {
         // get executor with min tasks
         let trgt = self
             .workers
             .iter()
             .map(|&(ref executor, _)| executor)
-            .next();
-            //.min_by_key(|executor| executor.count_tasks());
+            .min_by_key(|executor| executor.count_tasks());
         match trgt {
             Some(executor) => {
                 executor.schedule(task);
-                Ok(())
+                Ok(executor.get_cpu())
             }
             None => Err(()),
         }
@@ -73,19 +72,18 @@ impl CpuPool for SegregatedCpuPool {
     // Finds the least busy executor and queues the task into it's work queue
     // Right now, the least busy executor is the one with the least tasks
     // scheduled.
-    fn schedule(&self, task: Box<Iterable>) -> Result<(), ()> {
+    fn schedule(&self, task: Box<Iterable>) -> Result<usize, ()> {
         // update tasks counts
 
         // get executor with min tasks
         let trgt = self
             .workers
             .iter()
-            .next();
-        //    .min_by_key(|executor| executor.count_tasks());
+            .min_by_key(|executor| executor.count_tasks());
         match trgt {
             Some(executor) => {
                 executor.schedule(task);
-                Ok(())
+                Ok(executor.get_cpu())
             }
             None => Err(()),
         }

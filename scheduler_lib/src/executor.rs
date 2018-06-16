@@ -1,14 +1,19 @@
 use super::task::{Iterable, TaskState};
 use crossbeam_deque::{Deque, Steal, Stealer};
 use libc::{cpu_set_t, pthread_setaffinity_np, CPU_SET, CPU_ZERO};
+use std::borrow::BorrowMut;
 use std::cell::Cell;
 use std::mem;
 use std::os::unix::thread::JoinHandleExt;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::{channel, Receiver, SendError, Sender};
+use std::sync::Arc;
 use std::thread;
 
 pub struct Executor {
     cpu: usize,
+    busy: Arc<AtomicBool>,
     not_acked_tasks: Cell<usize>,
     thread: thread::JoinHandle<()>,
     work_channel: Sender<Box<Iterable>>,
@@ -25,10 +30,13 @@ impl Executor {
         let (send_work_channel, receive_work_channel) = channel();
         let (send_stealer_channel, receive_stealer_channel) = channel();
         let (send_acknowlege_work_channel, receive_acknowlege_work_channel) = channel();
+        let busy_flag = Arc::new(AtomicBool::new(false));
+        let busy_flag_clone = busy_flag.clone();
 
         let t_handle = thread::spawn(move || {
             let mut inner_executor = InnerExecutor::new(
                 cpu,
+                busy_flag_clone,
                 work_queue,
                 receive_work_channel,
                 receive_stealer_channel,
@@ -49,6 +57,7 @@ impl Executor {
 
         let executor = Executor {
             cpu,
+            busy: busy_flag,
             not_acked_tasks: Cell::new(0),
             thread: t_handle,
             work_channel: send_work_channel,
@@ -83,11 +92,16 @@ impl Executor {
             .set(self.not_acked_tasks.get() - acked_tasks);
 
         // return the size of the work queue + size of tasks not acked yet
+        // + 1 if the executor is busy.
         // HEADS UP: this count may not be precisely correct once read:
         // the underlying thread may acknowledge tasks at any point and
         // alter the size of the work queue. If work stealing is enabled,
         // then other threads may also alter the size of the work queue
-        return self.not_acked_tasks.get() + self.work_queue_peeker.len();
+        if self.busy.load(Ordering::Relaxed) {
+            self.not_acked_tasks.get() + self.work_queue_peeker.len() + 1
+        } else {
+            self.not_acked_tasks.get() + self.work_queue_peeker.len()
+        }
     }
 }
 
@@ -95,6 +109,7 @@ impl Executor {
 
 struct InnerExecutor {
     cpu: usize,
+    busy: Arc<AtomicBool>,
     work_queue: Deque<Box<Iterable>>,
     receive_work_channel: Receiver<Box<Iterable>>,
     receive_stealer_channel: Receiver<Stealer<Box<Iterable>>>,
@@ -105,6 +120,7 @@ struct InnerExecutor {
 impl InnerExecutor {
     fn new(
         cpu: usize,
+        busy: Arc<AtomicBool>,
         work_queue: Deque<Box<Iterable>>,
         receive_work_channel: Receiver<Box<Iterable>>,
         receive_stealer_channel: Receiver<Stealer<Box<Iterable>>>,
@@ -114,6 +130,7 @@ impl InnerExecutor {
         let stealers = Vec::with_capacity(n_stealers);
         let mut inner_executor = InnerExecutor {
             cpu,
+            busy,
             work_queue,
             receive_work_channel,
             receive_stealer_channel,
@@ -158,6 +175,7 @@ impl InnerExecutor {
     fn do_work(&mut self) -> bool {
         match self.work_queue.steal() {
             Steal::Data(mut task) => {
+                self.busy.store(true, Ordering::Relaxed);
                 task.tick();
                 match task.get_state() {
                     &TaskState::Incomplete => {
@@ -178,6 +196,7 @@ impl InnerExecutor {
                         // for failure easy to determine.
                     }
                 };
+                self.busy.store(false, Ordering::Relaxed);
                 true
             }
             Steal::Retry => false,
@@ -189,7 +208,8 @@ impl InnerExecutor {
         let stealer = self.stealers.iter().max_by_key(|s| s.len());
         match stealer {
             Some(stealer) => match stealer.steal() {
-                Steal::Data(task) => {
+                Steal::Data(mut task) => {
+                    task.mark_stolen();
                     self.work_queue.push(task);
                 }
                 Steal::Empty => {}
