@@ -3,10 +3,13 @@ use statrs::distribution::{Distribution, Exponential, Gamma};
 
 pub struct F64exponentialUncertain {
     pub rate: f64,
+    pub scale: f64,
 }
+
 pub struct F64gammaUncertain {
     pub shape: f64,
     pub rate: f64,
+    pub scale: f64,
 }
 
 pub fn generate_task_data(
@@ -20,8 +23,10 @@ pub fn generate_task_data(
 
     let mut data = Vec::with_capacity(n_tasks);
     for _ in 0..n_tasks {
-        let delay = expon_distribution.sample::<StdRng>(&mut random_number_generator);
-        let size = gamma_distribution.sample::<StdRng>(&mut random_number_generator);
+        let delay =
+            expon_distribution.sample::<StdRng>(&mut random_number_generator) * task_rate.scale;
+        let size =
+            gamma_distribution.sample::<StdRng>(&mut random_number_generator) * task_size.scale;
         data.push((delay, size));
     }
 

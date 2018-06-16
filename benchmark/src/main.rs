@@ -1,10 +1,14 @@
+extern crate histogram;
 extern crate rand;
 extern crate scheduler;
 extern crate statrs;
 
+use histogram::Histogram;
 use scheduler::cpupool::{CpuPool, SegregatedCpuPool, WorkStealingCpuPool};
+use scheduler::cycles::to_seconds;
 use scheduler::task::{Task, TaskState};
 use scheduler::waiter::{WaitResult, Waiter};
+use std::env;
 use std::time::{Duration, Instant, SystemTime};
 
 mod data;
@@ -47,41 +51,66 @@ fn nth_prime(n: usize) -> usize {
     last_prime
 }
 
-fn run_benchmark(n_cores: usize, n_tasks: usize, n_primes: usize) -> Duration {
-    let pool = WorkStealingCpuPool::new(n_cores);
-    let mut task_waiters: Vec<Waiter<WaitResult<usize>>> = Vec::with_capacity(n_tasks);
+fn warm_up(pool: &CpuPool) {
+    let waiters: Vec<(usize, Waiter<WaitResult<usize>>)> = vec![1000 as usize, 1000]
+        .into_iter()
+        .map(|data| {
+            // create a task
+            let mut task = Task::new(move || {
+                let n = nth_prime(data);
+                (TaskState::Complete, Some(n))
+            });
+            let waiter = task.waiter().unwrap();
+            let boxed_task = Box::new(task);
+            pool.schedule(boxed_task);
+            (data, waiter)
+        })
+        .collect();
 
-    let timer = SystemTime::now();
-    for _i in 0..n_tasks {
-        let mut task = Task::new(move || {
-            let n = nth_prime(n_primes);
-            (TaskState::Complete, Some(n))
-        });
-        let waiter = task.waiter().unwrap();
-        let boxed_task = Box::new(task);
-        pool.schedule(boxed_task);
-        task_waiters.push(waiter);
-    }
-
-    for task in task_waiters {
-        match task.await() {
-            Ok(_) => (),
-            Err(_) => (),
-        }
-    }
-    timer.elapsed().unwrap()
+    let _: Vec<(usize, u64)> = waiters
+        .into_iter()
+        .map(|(size, waiter)| {
+            let result = match waiter.await() {
+                Ok(wait_result) => {
+                    wait_result.get_total_time()
+                }
+                Err(_) => 0,
+            };
+            (size, result)
+        })
+        .collect();
 }
 
-fn run_benchmark_uncertain(n_cores: usize, task_data: Vec<(f64, f64)>) -> Vec<(u64, usize, u64)> {
+fn run_benchmark(
+    n_cores: usize,
+    n_elephants: usize,
+    task_data: Vec<(u64, usize)>,
+) -> Vec<(u64, usize, f64)> {
     let pool = WorkStealingCpuPool::new(n_cores);
+
+    warm_up(&pool);
+    let big_task_size = 1_000_000;
+
+    let big_tasks: Vec<Waiter<WaitResult<usize>>> = vec![big_task_size; n_elephants]
+        .into_iter()
+        .map(|_| {
+            let mut task = Task::new(move || {
+                let n = nth_prime(big_task_size);
+                (TaskState::Complete, Some(n))
+            });
+            let waiter = task.waiter().unwrap();
+            pool.schedule(Box::new(task));
+            waiter
+        })
+        .collect();
 
     let waiters: Vec<(u64, usize, Waiter<WaitResult<usize>>)> = task_data
         .into_iter()
         .map(|data| {
             // spin for a certain amount of time
             let now = Instant::now();
-            let delay = (data.0 * 1000.0) as u64;
-            let n = (data.1 * 10000.0) as usize;
+            let delay = data.0;
+            let n = data.1;
             let until = Duration::from_nanos(delay);
             while now.elapsed() < until {}
             // create a task
@@ -96,16 +125,29 @@ fn run_benchmark_uncertain(n_cores: usize, task_data: Vec<(f64, f64)>) -> Vec<(u
         })
         .collect();
 
+    let b: Vec<f64> = big_tasks
+        .into_iter()
+        .map(|waiter| {
+            let result = match waiter.await() {
+                Ok(wait_result) => {
+                    let cycles = wait_result.get_total_time();
+                    to_seconds(cycles)
+                }
+                Err(_) => 0.,
+            };
+            result
+        })
+        .collect();
+
     waiters
         .into_iter()
         .map(|(delay, size, waiter)| {
             let result = match waiter.await() {
                 Ok(wait_result) => {
-                    let seconds = wait_result.get_total_time().as_secs();
-                    let nanos = wait_result.get_total_time().subsec_nanos();
-                    (seconds * 1_000_000_000) + nanos as u64
+                    let cycles = wait_result.get_total_time();
+                    to_seconds(cycles)
                 }
-                Err(_) => 0,
+                Err(_) => 0.,
             };
             (delay, size, result)
         })
@@ -125,120 +167,77 @@ fn is_prime_test() {
     assert_eq!(true, is_prime(29));
 }
 
-#[bench]
-fn n1024_prime_benchmark(bencher: &mut Bencher) {
-    bencher.iter(|| {
-        nth_prime(1024);
+fn fixed_size_run(frequency: u64, size: usize, n_tasks: usize, n_cores: usize) {
+    let freq = vec![frequency; n_tasks];
+    let sizes = vec![size; n_tasks];
+    let data: Vec<(u64, usize)> = freq.into_iter().zip(sizes).collect();
+
+    let results = run_benchmark(n_cores, 0, data);
+
+    let mut hist = Histogram::new();
+    results.into_iter().for_each(|(_, _, time)| {
+        // println!("{}", time);
+        &hist.increment((time * 1e9) as u64);
     });
+
+    println!(
+        "{} {} {} {} {}",
+        hist.percentile(1.0).unwrap(),
+        hist.percentile(25.0).unwrap(),
+        hist.percentile(50.0).unwrap(),
+        hist.percentile(75.0).unwrap(),
+        hist.percentile(99.0).unwrap()
+    );
 }
 
-#[bench]
-fn n2048_prime_benchmark(bencher: &mut Bencher) {
-    bencher.iter(|| {
-        nth_prime(8192);
+fn elephant_run(frequency: u64, size: usize, n_tasks: usize, n_cores: usize) {
+    let freq = vec![frequency; n_tasks];
+    let sizes = vec![size; n_tasks];
+    let data: Vec<(u64, usize)> = freq.into_iter().zip(sizes).collect();
+
+    let results = run_benchmark(n_cores, 1, data);
+
+    let mut hist = Histogram::new();
+    results.into_iter().for_each(|(_, _, time)| {
+        // println!("{}", time);
+        &hist.increment((time * 1e9) as u64);
     });
+
+    println!(
+        "{} {} {} {} {}",
+        hist.percentile(1.0).unwrap(),
+        hist.percentile(25.0).unwrap(),
+        hist.percentile(50.0).unwrap(),
+        hist.percentile(75.0).unwrap(),
+        hist.percentile(99.0).unwrap()
+    );
 }
 
-fn uniform_load_short_task() {
-    print_header();
-    let elapsed = run_benchmark(8, 1024, 1024);
-    println!("8\t1024\t\t1024\t\t{:?}", elapsed);
-}
-
-fn uniform_load_long_task() {
-    print_header();
-    let elapsed = run_benchmark(8, 1024, 8192);
-    println!("8\t1024\t\t8192\t\t{:?}", elapsed);
-}
-
-fn low_freq_short_task_short_tail() {
-    // expect a new task once every 100 microseconds
-    let exp = data::F64exponentialUncertain { rate: 1.0 / 100.0 };
-    // expected value of size param is 5, with low tail
-    let gamma = data::F64gammaUncertain {
-        shape: 10.0,
-        rate: 2.0,
-    };
-    let data = data::generate_task_data(10000, exp, gamma);
-    let results = run_benchmark_uncertain(6, data);
-    results
+fn exp_gamma_run(
+    frequency: data::F64exponentialUncertain,
+    size: data::F64gammaUncertain,
+    n_tasks: usize,
+    n_cores: usize,
+) {
+    let data = data::generate_task_data(n_tasks, frequency, size)
         .into_iter()
-        .for_each(|r| println!("{:?},{:?},{:?}", r.0, r.1, r.2));
-}
+        .map(|d: (f64, f64)| (d.0 as u64, d.1 as usize))
+        .collect();
+    let results = run_benchmark(n_cores, 0, data);
 
-fn high_freq_short_task_short_tail() {
-    // expect a new task once every 100 microseconds
-    let exp = data::F64exponentialUncertain { rate: 100.0 };
-    // expected value of size param is 5, with low tail
-    let gamma = data::F64gammaUncertain {
-        shape: 10.0,
-        rate: 2.0,
-    };
-    let data = data::generate_task_data(10000, exp, gamma);
-    let results = run_benchmark_uncertain(6, data);
-    results
-        .into_iter()
-        .for_each(|r| println!("{:?},{:?},{:?}", r.0, r.1, r.2));
-}
+    let mut hist = Histogram::new();
+    results.into_iter().for_each(|(_, _, time)| {
+        &hist.increment((time * 1e9) as u64);
+    });
 
-fn low_freq_long_task_short_tail() {
-    // expect a new task once every 100 microseconds
-    let exp = data::F64exponentialUncertain { rate: 1.0 / 100.0 };
-    // expected value of size param is 5, with low tail
-    let gamma = data::F64gammaUncertain {
-        shape: 40.0,
-        rate: 2.0,
-    };
-    let data = data::generate_task_data(10000, exp, gamma);
-    let results = run_benchmark_uncertain(6, data);
-    results
-        .into_iter()
-        .for_each(|r| println!("{:?},{:?},{:?}", r.0, r.1, r.2));
-}
-
-fn high_freq_long_task_short_tail() {
-    // expect a new task once every 100 microseconds
-    let exp = data::F64exponentialUncertain { rate: 100.0 };
-    // expected value of size param is 5, with low tail
-    let gamma = data::F64gammaUncertain {
-        shape: 40.0,
-        rate: 2.0,
-    };
-    let data = data::generate_task_data(10000, exp, gamma);
-    let results = run_benchmark_uncertain(6, data);
-    results
-        .into_iter()
-        .for_each(|r| println!("{:?},{:?},{:?}", r.0, r.1, r.2));
-}
-
-fn low_freq_long_tail() {
-    // expect a new task once every 100 microseconds
-    let exp = data::F64exponentialUncertain { rate: 1.0 / 100.0 };
-    // expected value of size param is 5, with low tail
-    let gamma = data::F64gammaUncertain {
-        shape: 1.0,
-        rate: 0.05,
-    };
-    let data = data::generate_task_data(10000, exp, gamma);
-    let results = run_benchmark_uncertain(6, data);
-    results
-        .into_iter()
-        .for_each(|r| println!("{:?},{:?},{:?}", r.0, r.1, r.2));
-}
-
-fn high_freq_long_tail() {
-    // expect a new task once every 100 microseconds
-    let exp = data::F64exponentialUncertain { rate: 100.0 };
-    // expected value of size param is 5, with low tail
-    let gamma = data::F64gammaUncertain {
-        shape: 1.0,
-        rate: 0.05,
-    };
-    let data = data::generate_task_data(1000, exp, gamma);
-    let results = run_benchmark_uncertain(6, data);
-    results
-        .into_iter()
-        .for_each(|r| println!("{:?},{:?},{:?}", r.0, r.1, r.2));
+    println!(
+        "{} {} {} {} {}",
+        hist.percentile(1.0).unwrap(),
+        hist.percentile(25.0).unwrap(),
+        hist.percentile(50.0).unwrap(),
+        hist.percentile(75.0).unwrap(),
+        hist.percentile(99.0).unwrap()
+    );
 }
 
 fn print_header() {
@@ -246,11 +245,30 @@ fn print_header() {
 }
 
 fn main() {
-    //uniform_load_short_task();
-    //low_freq_short_task_short_tail();
-    //high_freq_short_task_short_tail();
-    //low_freq_long_task_short_tail();
-    //high_freq_long_task_short_tail();
-    //low_freq_long_tail();
-    high_freq_long_tail();
+    let args: Vec<String> = env::args().collect();
+    if args.len() != 5 {
+        println!(
+            "Usage: {} <delay (ns): u64> <nth_prime: usize> <n_tasks: usize> <n_cores: usize>",
+            args[0]
+        );
+        return;
+    }
+    //    let frequency = data::F64exponentialUncertain {
+    //        rate: args[1].parse().unwrap(),
+    //        scale: args[2].parse().unwrap(),
+    //    };
+    //    let size = data::F64gammaUncertain {
+    //        shape: args[3].parse().unwrap(),
+    //        rate: args[4].parse().unwrap(),
+    //        scale: args[5].parse().unwrap(),
+    //    };
+    let n_tasks: usize = args[3].parse().unwrap();
+    let n_cores: usize = args[4].parse().unwrap();
+
+    fixed_size_run(
+        args[1].parse().unwrap(),
+        args[2].parse().unwrap(),
+        n_tasks,
+        n_cores,
+    );
 }

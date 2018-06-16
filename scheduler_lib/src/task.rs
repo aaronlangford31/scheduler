@@ -1,7 +1,7 @@
 use super::waiter::{WaitResult, Waiter};
+use cycles::rdtsc;
 use std::marker::Send;
 use std::sync::mpsc::{channel, Sender};
-use std::time::SystemTime;
 
 pub enum TaskState {
     Unstarted,
@@ -26,7 +26,7 @@ where
     // Poll needs to simply return status, Tick needs to actually advance the thing.
     ticks: u32,
     cpu_time: u64,
-    birthday: SystemTime,
+    birthday: u64,
     state: TaskState,
     result: Option<R>,
     send_result_channel: Option<Sender<WaitResult<R>>>,
@@ -43,7 +43,7 @@ where
             _tick: func,
             ticks: 0,
             cpu_time: 0,
-            birthday: SystemTime::now(),
+            birthday: rdtsc(),
             state: TaskState::Unstarted,
             result: None,
             send_result_channel: None,
@@ -72,21 +72,14 @@ where
 {
     fn tick(&mut self) {
         self.ticks += 1;
-        let timer = SystemTime::now();
+        let start = rdtsc();
 
         let (state, result) = (self._tick)();
         self.state = state;
         self.result = result;
 
-        match timer.elapsed() {
-            Ok(elapsed) => {
-                self.cpu_time +=
-                    (elapsed.as_secs() * 1_000_000_000) + elapsed.subsec_nanos() as u64;
-            }
-            Err(_err) => {
-                self.state = TaskState::Error;
-            }
-        }
+        let end = rdtsc();
+        self.cpu_time += end - start;
     }
 
     fn get_state(&self) -> &TaskState {
@@ -98,7 +91,7 @@ where
         match this.result {
             Some(result) => match this.send_result_channel {
                 Some(channel) => {
-                    let total_time = this.birthday.elapsed().unwrap();
+                    let total_time = rdtsc() - this.birthday;
                     match channel.send(WaitResult::new(
                         result,
                         this.cpu_time,

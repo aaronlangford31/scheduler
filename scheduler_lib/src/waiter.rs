@@ -32,7 +32,7 @@ where
 {
     result: T,
     cpu_time: u64,
-    total_time: Duration,
+    total_time: u64,
     ticks: u32,
 }
 
@@ -40,7 +40,7 @@ impl<T> WaitResult<T>
 where
     T: Send,
 {
-    pub fn new(result: T, cpu_time: u64, total_time: Duration, ticks: u32) -> WaitResult<T> {
+    pub fn new(result: T, cpu_time: u64, total_time: u64, ticks: u32) -> WaitResult<T> {
         WaitResult {
             result,
             cpu_time,
@@ -53,7 +53,7 @@ where
         self.cpu_time
     }
 
-    pub fn get_total_time(&self) -> &Duration {
-        &self.total_time
+    pub fn get_total_time(&self) -> u64 {
+        self.total_time
     }
 }

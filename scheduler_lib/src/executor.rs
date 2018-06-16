@@ -99,7 +99,7 @@ struct InnerExecutor {
     receive_work_channel: Receiver<Box<Iterable>>,
     receive_stealer_channel: Receiver<Stealer<Box<Iterable>>>,
     acknowlege_work_channel: Sender<()>,
-    stealers: Vec<Stealer<Box<Iterable>>>
+    stealers: Vec<Stealer<Box<Iterable>>>,
 }
 
 impl InnerExecutor {
@@ -118,7 +118,7 @@ impl InnerExecutor {
             receive_work_channel,
             receive_stealer_channel,
             acknowlege_work_channel,
-            stealers
+            stealers,
         };
         inner_executor.receive_stealers();
         inner_executor
@@ -181,7 +181,7 @@ impl InnerExecutor {
                 true
             }
             Steal::Retry => false,
-            Steal::Empty => false
+            Steal::Empty => false,
         }
     }
 
