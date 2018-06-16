@@ -16,7 +16,7 @@ impl WorkStealingCpuPool {
             workers: Vec::with_capacity(n_threads),
         };
         for i in 0..n_threads {
-            let (executor, stealer) = Executor::new(i, 0);
+            let (executor, stealer) = Executor::new(i, n_threads - 1);
             pool.workers.push((executor, stealer));
         }
         for &(ref executor_a, _) in &pool.workers {
@@ -40,7 +40,8 @@ impl CpuPool for WorkStealingCpuPool {
             .workers
             .iter()
             .map(|&(ref executor, _)| executor)
-            .min_by_key(|executor| executor.count_tasks());
+            .next();
+            //.min_by_key(|executor| executor.count_tasks());
         match trgt {
             Some(executor) => {
                 executor.schedule(task);
@@ -79,7 +80,8 @@ impl CpuPool for SegregatedCpuPool {
         let trgt = self
             .workers
             .iter()
-            .min_by_key(|executor| executor.count_tasks());
+            .next();
+        //    .min_by_key(|executor| executor.count_tasks());
         match trgt {
             Some(executor) => {
                 executor.schedule(task);
