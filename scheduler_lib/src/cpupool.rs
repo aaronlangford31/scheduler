@@ -11,21 +11,29 @@ pub struct WorkStealingCpuPool {
 }
 
 impl WorkStealingCpuPool {
-    pub fn new(n_threads: usize) -> WorkStealingCpuPool {
-        let mut pool = WorkStealingCpuPool {
-            workers: Vec::with_capacity(n_threads),
-        };
+    pub fn new(n_threads: usize, n_cores: usize) -> WorkStealingCpuPool {
+        let mut cpu_list: Vec<usize> = Vec::with_capacity(n_threads);
         for i in 0..n_threads {
-            let (executor, stealer) = Executor::new(i, n_threads - 1);
-            pool.workers.push((executor, stealer));
+            cpu_list.push(i % n_cores);
         }
-        for &(ref executor_a, _) in &pool.workers {
-            pool.workers
+        WorkStealingCpuPool::new_from_list(cpu_list)
+    }
+
+    pub fn new_from_list(cpu_thread_list: Vec<usize>) -> WorkStealingCpuPool {
+        let n_threads = cpu_thread_list.len();
+        let workers: Vec<(Executor, Stealer<Box<Iterable>>)> = cpu_thread_list
+            .into_iter()
+            .map(|cpu_thread_id: usize| Executor::new(cpu_thread_id, n_threads - 1))
+            .collect();
+        for (executor_a, _) in &workers {
+            &workers
                 .iter()
-                .filter(|&&(ref worker, _)| worker.get_cpu() != executor_a.get_cpu())
-                .for_each(|&(_, ref stealer)| executor_a.send_stealer(stealer.clone()).unwrap());
+                .filter(|&&(ref worker, _)| worker as *const _ != executor_a as *const _)
+                .for_each(|&(_, ref stealer)| {
+                    executor_a.send_stealer(stealer.clone()).unwrap();
+                });
         }
-        pool
+        WorkStealingCpuPool { workers }
     }
 }
 

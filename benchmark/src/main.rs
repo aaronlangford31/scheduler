@@ -11,53 +11,20 @@ use scheduler::waiter::{WaitResult, Waiter};
 use std::env;
 
 mod data;
-
-fn is_prime(n: usize) -> bool {
-    match n {
-        0 | 1 => false,
-        2 | 3 => true,
-        _ => {
-            if n % 2 == 0 {
-                false
-            } else {
-                let n_root = (n as f64).sqrt() as usize + 1;
-                !(3..n_root).any(|x: usize| n % x == 0)
-            }
-        }
-    }
-}
-
-fn next_prime(start_from: usize) -> usize {
-    // increment until you find a prime
-    let mut curr = start_from + 1;
-    while !is_prime(curr) {
-        curr += 1;
-    }
-    curr
-}
-
-fn nth_prime(n: usize) -> usize {
-    if n == 0 {
-        return 0;
-    }
-    let mut counter = 1;
-    let mut last_prime = 2;
-
-    while counter != n {
-        last_prime = next_prime(last_prime);
-        counter += 1;
-    }
-    last_prime
-}
+mod primes;
 
 fn warm_up(pool: &CpuPool) {
     let waiters: Vec<(usize, Waiter<WaitResult<usize>>)> = vec![1000 as usize, 1000]
         .into_iter()
         .map(|data| {
             // create a task
+            let mut prime_calculation = primes::Primatizer::new(data);
             let mut task = Task::new(move || {
-                let n = nth_prime(data);
-                (TaskState::Complete, Some(n))
+                prime_calculation.step(data);
+                (
+                    TaskState::Complete,
+                    Some(prime_calculation.get_last_prime()),
+                )
             });
             let waiter = task.waiter().unwrap();
             let boxed_task = Box::new(task);
@@ -79,27 +46,35 @@ fn warm_up(pool: &CpuPool) {
 }
 
 fn run_benchmark(
+    n_threads: usize,
     n_cores: usize,
     n_elephants: usize,
     task_data: Vec<(u64, usize)>,
 ) -> Vec<(u64, usize, f64, usize)> {
-    let pool = SegregatedCpuPool::new(n_cores);
+    let pool = WorkStealingCpuPool::new(n_threads, n_cores);
 
     warm_up(&pool);
-    let big_task_size = 1_000_000;
+    let big_task_size = 100_000;
+    let big_task_step = 100_000;
 
     let big_tasks: Vec<Waiter<WaitResult<usize>>> = vec![big_task_size; n_elephants]
         .into_iter()
         .map(|_| {
-            let mut task = Task::new(move || {
-                let n = nth_prime(big_task_size);
-                (TaskState::Complete, Some(n))
+            let mut prime_calculation = primes::Primatizer::new(big_task_size);
+            let mut task = Task::new(move || match prime_calculation.step(big_task_step) {
+                TaskState::Complete => (
+                    TaskState::Complete,
+                    Some(prime_calculation.get_last_prime()),
+                ),
+                TaskState::Incomplete => (TaskState::Incomplete, None),
+                TaskState::Error => (TaskState::Error, None),
+                TaskState::Unstarted => (TaskState::Unstarted, None),
             });
             let waiter = task.waiter().unwrap();
             let sched_result = pool.schedule(Box::new(task));
             match sched_result {
                 Ok(cpu) => println!("{}", cpu),
-                Err(_) => panic!("Schedule failure")
+                Err(_) => panic!("Schedule failure"),
             }
 
             waiter
@@ -116,9 +91,13 @@ fn run_benchmark(
             let until = now + delay;
             while ((to_seconds(rdtsc()) * 1e9) as u64) < until {}
             // create a task
+            let mut prime_calculation = primes::Primatizer::new(n);
             let mut task = Task::new(move || {
-                let n = nth_prime(n);
-                (TaskState::Complete, Some(n))
+                prime_calculation.step(n);
+                (
+                    TaskState::Complete,
+                    Some(prime_calculation.get_last_prime()),
+                )
             });
             let waiter = task.waiter().unwrap();
             let boxed_task = Box::new(task);
@@ -158,25 +137,12 @@ fn run_benchmark(
         .collect()
 }
 
-#[test]
-fn nth_prime_test() {
-    assert_eq!(3, nth_prime(2));
-    assert_eq!(8161, nth_prime(1024));
-}
-
-#[test]
-fn is_prime_test() {
-    assert_eq!(false, is_prime(15));
-    assert_eq!(false, is_prime(2875));
-    assert_eq!(true, is_prime(29));
-}
-
-fn fixed_size_run(frequency: u64, size: usize, n_tasks: usize, n_cores: usize) {
+fn fixed_size_run(frequency: u64, size: usize, n_tasks: usize, n_threads: usize, n_cores: usize) {
     let freq = vec![frequency; n_tasks];
     let sizes = vec![size; n_tasks];
     let data: Vec<(u64, usize)> = freq.into_iter().zip(sizes).collect();
 
-    let results = run_benchmark(n_cores, 0, data);
+    let results = run_benchmark(n_threads, n_cores, 0, data);
 
     let mut hist = Histogram::new();
     results.into_iter().for_each(|(_, _, time, _)| {
@@ -191,12 +157,19 @@ fn fixed_size_run(frequency: u64, size: usize, n_tasks: usize, n_cores: usize) {
     );
 }
 
-fn elephant_run(frequency: u64, size: usize, n_tasks: usize, n_cores: usize) {
+fn elephant_run(
+    frequency: u64,
+    size: usize,
+    n_tasks: usize,
+    n_threads: usize,
+    n_cores: usize,
+    n_elephants: usize,
+) {
     let freq = vec![frequency; n_tasks];
     let sizes = vec![size; n_tasks];
     let data: Vec<(u64, usize)> = freq.into_iter().zip(sizes).collect();
 
-    let results = run_benchmark(n_cores, 4, data);
+    let results = run_benchmark(n_threads, n_cores, n_elephants, data);
 
     let mut hist = Histogram::new();
     let mut total_steals = 0;
@@ -204,7 +177,6 @@ fn elephant_run(frequency: u64, size: usize, n_tasks: usize, n_cores: usize) {
         // println!("{}", time);
         &hist.increment((time * 1e9) as u64);
         total_steals += n_steals;
-        if(n_steals > 1) { println!("Hot potato! {} {}", n_steals, (time * 1e9) as u64) }
     });
 
     println!(
@@ -219,13 +191,14 @@ fn exp_gamma_run(
     frequency: data::F64exponentialUncertain,
     size: data::F64gammaUncertain,
     n_tasks: usize,
+    n_threads: usize,
     n_cores: usize,
 ) {
     let data = data::generate_task_data(n_tasks, frequency, size)
         .into_iter()
         .map(|d: (f64, f64)| (d.0 as u64, d.1 as usize))
         .collect();
-    let results = run_benchmark(n_cores, 0, data);
+    let results = run_benchmark(n_threads, n_cores, 0, data);
 
     let mut hist = Histogram::new();
     results.into_iter().for_each(|(_, _, time, _)| {
@@ -248,9 +221,9 @@ fn print_header() {
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    if args.len() != 5 {
+    if args.len() != 7 {
         println!(
-            "Usage: {} <delay (ns): u64> <nth_prime: usize> <n_tasks: usize> <n_cores: usize>",
+            "Usage: {} <delay (ns): u64> <nth_prime: usize> <n_tasks: usize> <n_threads: usize> <n_cores: usize> <n_elephants: usize>",
             args[0]
         );
         return;
@@ -265,12 +238,16 @@ fn main() {
     //        scale: args[5].parse().unwrap(),
     //    };
     let n_tasks: usize = args[3].parse().unwrap();
-    let n_cores: usize = args[4].parse().unwrap();
+    let n_threads: usize = args[4].parse().unwrap();
+    let n_cores: usize = args[5].parse().unwrap();
+    let n_elephants: usize = args[6].parse().unwrap();
 
     elephant_run(
         args[1].parse().unwrap(),
         args[2].parse().unwrap(),
         n_tasks,
+        n_threads,
         n_cores,
+        n_elephants,
     );
 }

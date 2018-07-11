@@ -46,15 +46,6 @@ impl Executor {
             inner_executor.run();
         });
 
-        // set thread affinity
-        let tid = t_handle.as_pthread_t();
-        unsafe {
-            let mut cpuset: cpu_set_t = mem::uninitialized();
-            CPU_ZERO(&mut cpuset);
-            CPU_SET(cpu, &mut cpuset);
-            pthread_setaffinity_np(tid, mem::size_of::<cpu_set_t>(), &mut cpuset);
-        };
-
         let executor = Executor {
             cpu,
             busy: busy_flag,
@@ -65,6 +56,12 @@ impl Executor {
             work_queue_peeker,
             stealer_channel: send_stealer_channel,
         };
+
+        // set thread affinity
+        unsafe {
+            executor.pin_thread();
+        }
+
         (executor, work_stealer)
     }
 
@@ -102,6 +99,14 @@ impl Executor {
         } else {
             self.not_acked_tasks.get() + self.work_queue_peeker.len()
         }
+    }
+
+    unsafe fn pin_thread(&self) {
+        let tid = self.thread.as_pthread_t();
+        let mut cpuset: cpu_set_t = mem::uninitialized();
+        CPU_ZERO(&mut cpuset);
+        CPU_SET(self.cpu, &mut cpuset);
+        pthread_setaffinity_np(tid, mem::size_of::<cpu_set_t>(), &mut cpuset);
     }
 }
 
