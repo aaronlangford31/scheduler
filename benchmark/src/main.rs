@@ -6,9 +6,11 @@ extern crate statrs;
 use histogram::Histogram;
 use scheduler::cpupool::{CpuPool, SegregatedCpuPool, WorkStealingCpuPool};
 use scheduler::cycles::{rdtsc, to_seconds};
+use scheduler::dispatcher::RandomDispatcher;
 use scheduler::task::{Task, TaskState};
 use scheduler::waiter::{WaitResult, Waiter};
 use std::env;
+use scheduler::dispatcher::LoadAwareDispatcher;
 
 mod data;
 mod primes;
@@ -51,7 +53,8 @@ fn run_benchmark(
     n_elephants: usize,
     task_data: Vec<(u64, usize)>,
 ) -> Vec<(u64, usize, f64, usize)> {
-    let pool = WorkStealingCpuPool::new(n_threads, n_cores);
+    let mut dispatcher = Box::new(LoadAwareDispatcher::new());
+    let pool = WorkStealingCpuPool::new(n_threads, n_cores, dispatcher);
 
     warm_up(&pool);
     let big_task_size = 100_000;

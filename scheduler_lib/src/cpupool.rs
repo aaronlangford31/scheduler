@@ -1,3 +1,4 @@
+use super::dispatcher::{Dispatcher, LoadAwareDispatcher};
 use super::executor::Executor;
 use super::task::Iterable;
 use crossbeam_deque::Stealer;
@@ -7,24 +8,26 @@ pub trait CpuPool {
 }
 
 pub struct WorkStealingCpuPool {
-    workers: Vec<(Executor, Stealer<Box<Iterable>>)>,
+    dispatcher: Box<Dispatcher>,
 }
 
 impl WorkStealingCpuPool {
-    pub fn new(n_threads: usize, n_cores: usize) -> WorkStealingCpuPool {
+    pub fn new(n_threads: usize, n_cores: usize, mut dispatcher: Box<Dispatcher>) -> WorkStealingCpuPool {
         let mut cpu_list: Vec<usize> = Vec::with_capacity(n_threads);
         for i in 0..n_threads {
             cpu_list.push(i % n_cores);
         }
-        WorkStealingCpuPool::new_from_list(cpu_list)
+        WorkStealingCpuPool::new_from_list(cpu_list, dispatcher)
     }
 
-    pub fn new_from_list(cpu_thread_list: Vec<usize>) -> WorkStealingCpuPool {
+    pub fn new_from_list(cpu_thread_list: Vec<usize>, mut dispatcher: Box<Dispatcher>) -> WorkStealingCpuPool {
         let n_threads = cpu_thread_list.len();
         let workers: Vec<(Executor, Stealer<Box<Iterable>>)> = cpu_thread_list
             .into_iter()
             .map(|cpu_thread_id: usize| Executor::new(cpu_thread_id, n_threads - 1))
             .collect();
+
+        // inject stealers
         for (executor_a, _) in &workers {
             &workers
                 .iter()
@@ -33,23 +36,19 @@ impl WorkStealingCpuPool {
                     executor_a.send_stealer(stealer.clone()).unwrap();
                 });
         }
-        WorkStealingCpuPool { workers }
+
+        let workers_for_dispatch: Vec<Executor> =
+            workers.into_iter().map(|(worker, _)| worker).collect();
+        dispatcher.inject_fleet(workers_for_dispatch);
+        WorkStealingCpuPool {
+            dispatcher,
+        }
     }
 }
 
 impl CpuPool for WorkStealingCpuPool {
-    // Finds the least busy executor and queues the task into it's work queue
-    // Right now, the least busy executor is the one with the least tasks
-    // scheduled, but that number is possibly incorrect because Executors
-    // receive tasks on a channel, which is not counted in "task_count".
     fn schedule(&self, task: Box<Iterable>) -> Result<usize, ()> {
-        // get executor with min tasks
-        let trgt = self
-            .workers
-            .iter()
-            .map(|&(ref executor, _)| executor)
-            .min_by_key(|executor| executor.count_tasks());
-        match trgt {
+        match self.dispatcher.select() {
             Some(executor) => {
                 executor.schedule(task);
                 Ok(executor.get_cpu())
@@ -60,35 +59,26 @@ impl CpuPool for WorkStealingCpuPool {
 }
 
 pub struct SegregatedCpuPool {
-    workers: Vec<Executor>,
+    dispatcher: Box<Dispatcher>,
 }
 
 impl SegregatedCpuPool {
-    pub fn new(n_threads: usize) -> SegregatedCpuPool {
-        let mut pool = SegregatedCpuPool {
-            workers: Vec::with_capacity(n_threads),
-        };
+    pub fn new(n_threads: usize, mut dispatcher: Box<Dispatcher>) -> SegregatedCpuPool {
+        let mut workers = Vec::with_capacity(n_threads);
         for i in 0..n_threads {
             let (executor, _) = Executor::new(i, 0);
-            pool.workers.push(executor);
+            workers.push(executor);
         }
-        pool
+        dispatcher.inject_fleet(workers);
+        SegregatedCpuPool {
+            dispatcher,
+        }
     }
 }
 
 impl CpuPool for SegregatedCpuPool {
-    // Finds the least busy executor and queues the task into it's work queue
-    // Right now, the least busy executor is the one with the least tasks
-    // scheduled.
     fn schedule(&self, task: Box<Iterable>) -> Result<usize, ()> {
-        // update tasks counts
-
-        // get executor with min tasks
-        let trgt = self
-            .workers
-            .iter()
-            .min_by_key(|executor| executor.count_tasks());
-        match trgt {
+        match self.dispatcher.select() {
             Some(executor) => {
                 executor.schedule(task);
                 Ok(executor.get_cpu())

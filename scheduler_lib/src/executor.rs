@@ -1,7 +1,6 @@
 use super::task::{Iterable, TaskState};
 use crossbeam_deque::{Deque, Steal, Stealer};
 use libc::{cpu_set_t, pthread_setaffinity_np, CPU_SET, CPU_ZERO};
-use std::borrow::BorrowMut;
 use std::cell::Cell;
 use std::mem;
 use std::os::unix::thread::JoinHandleExt;

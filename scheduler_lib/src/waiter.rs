@@ -1,5 +1,4 @@
 use std::sync::mpsc::Receiver;
-use std::time::Duration;
 
 pub struct Waiter<T>
 where
